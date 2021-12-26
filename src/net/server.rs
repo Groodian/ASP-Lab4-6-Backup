@@ -1,4 +1,4 @@
-use crate::connection_thread::{self, ConnectionThread};
+use crate::net::{connection_thread::ConnectionThread, server_stop::ServerStop};
 use mio::{net::TcpListener, Events, Interest, Poll, Token};
 use std::{
     io,
@@ -10,12 +10,12 @@ use std::{
 };
 
 const SERVER_TOKEN: Token = Token(0);
-const SERVER_THREAD_NAME: &str = "Main Thread";
+const SERVER_THREAD_NAME: &str = "Thread-Main";
 
 pub struct Server {
     connection_thread_amount: usize,
     address: SocketAddr,
-    should_stop: Arc<Mutex<bool>>,
+    server_stop: ServerStop,
     server_socket_thread_handle: Option<JoinHandle<()>>,
     connection_threads: Arc<Mutex<Vec<ConnectionThread>>>,
 }
@@ -25,7 +25,7 @@ impl Server {
         Self {
             connection_thread_amount,
             address,
-            should_stop: Arc::new(Mutex::new(false)),
+            server_stop: ServerStop::new(),
             server_socket_thread_handle: None,
             connection_threads: Arc::new(Mutex::new(Vec::new())),
         }
@@ -52,7 +52,7 @@ impl Server {
         // Next thread to add conncetion
         let mut next_thread = 0;
 
-        let should_stop = Arc::clone(&self.should_stop);
+        let server_stop = self.server_stop.clone();
         let connection_threads = Arc::clone(&self.connection_threads);
 
         let connection_thread_amount = self.connection_thread_amount.clone();
@@ -75,18 +75,16 @@ impl Server {
                         poll.poll(&mut events, duration);
 
                         // check if thread should stop
-                        let should_stop = should_stop.lock().unwrap();
-                        if *should_stop {
+                        if server_stop.should_stop() {
                             return;
                         }
-                        drop(should_stop);
 
                         for event in events.iter() {
                             match event.token() {
                                 SERVER_TOKEN => loop {
                                     // Received an event for the TCP server socket, which
                                     // indicates we can accept an connection.
-                                    let (mut connection, address) = match server_socket.accept() {
+                                    let (connection, address) = match server_socket.accept() {
                                         Ok((connection, address)) => (connection, address),
                                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                                             // If we get a `WouldBlock` error we know our
@@ -143,21 +141,28 @@ impl Server {
         );
     }
 
+    pub fn get_server_stop(&self) -> ServerStop {
+        self.server_stop.clone()
+    }
+
     pub fn join(&mut self) {
         let server_socket_thread_handle = take(&mut self.server_socket_thread_handle);
 
         match server_socket_thread_handle {
             Some(server_socket_thread_handle) => match server_socket_thread_handle.join() {
-                Ok(_) => todo!(),
-                Err(_) => todo!(),
+                Ok(_) => println!("[{}] Stopped.", SERVER_THREAD_NAME),
+                Err(_) => eprintln!("[{}] Error while stopping!", SERVER_THREAD_NAME),
             },
             None => (),
         }
-    }
 
-    pub fn stop(&mut self) {
-        let mut should_stop = self.should_stop.lock().unwrap();
-        *should_stop = true;
-        drop(should_stop);
+        let mut connection_threads_guard = self.connection_threads.lock().unwrap();
+        for connection_thread in connection_threads_guard.iter_mut() {
+            connection_thread.get_server_stop().stop();
+        }
+        for connection_thread in connection_threads_guard.iter_mut() {
+            connection_thread.join();
+        }
+        drop(connection_threads_guard);
     }
 }

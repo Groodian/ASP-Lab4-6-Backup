@@ -1,7 +1,9 @@
+use crate::net::server_stop::ServerStop;
 use mio::{event::Event, net::TcpStream, Events, Interest, Poll, Registry, Token, Waker};
 use std::{
     collections::HashMap,
     io::{self, Read, Write},
+    mem::take,
     str::from_utf8,
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
@@ -13,9 +15,9 @@ const DATA: &[u8] = b"Hello world!\n";
 
 pub struct ConnectionThread {
     connection_thread_name: String,
+    server_stop: ServerStop,
     waker: Option<Arc<Waker>>,
     new_connections: Arc<Mutex<Vec<TcpStream>>>,
-    should_stop: Arc<Mutex<bool>>,
     connection_thread_handle: Option<JoinHandle<()>>,
 }
 
@@ -23,9 +25,9 @@ impl ConnectionThread {
     pub fn new(connection_thread_name: String) -> Self {
         Self {
             connection_thread_name,
+            server_stop: ServerStop::new(),
             waker: None,
             new_connections: Arc::new(Mutex::new(Vec::new())),
-            should_stop: Arc::new(Mutex::new(false)),
             connection_thread_handle: None,
         }
     }
@@ -50,7 +52,7 @@ impl ConnectionThread {
 
         let duration = Some(Duration::from_millis(500));
 
-        let should_stop = Arc::clone(&self.should_stop);
+        let server_stop = self.server_stop.clone();
         let new_connections = Arc::clone(&self.new_connections);
 
         let connection_thread_name = self.connection_thread_name.clone();
@@ -65,11 +67,9 @@ impl ConnectionThread {
                         poll.poll(&mut events, duration);
 
                         // check if thread should stop
-                        let should_stop = should_stop.lock().unwrap();
-                        if *should_stop {
+                        if server_stop.should_stop() {
                             return;
                         }
-                        drop(should_stop);
 
                         for event in events.iter() {
                             match event.token() {
@@ -227,6 +227,22 @@ impl ConnectionThread {
         }
 
         Ok(false)
+    }
+
+    pub fn join(&mut self) {
+        let connection_thread_handle = take(&mut self.connection_thread_handle);
+
+        match connection_thread_handle {
+            Some(connection_thread_handle) => match connection_thread_handle.join() {
+                Ok(_) => println!("[{}] Stopped.", self.connection_thread_name),
+                Err(_) => eprintln!("[{}] Error while stopping!", self.connection_thread_name),
+            },
+            None => (),
+        }
+    }
+
+    pub fn get_server_stop(&self) -> ServerStop {
+        self.server_stop.clone()
     }
 
     fn next(current: &mut Token) -> Token {
