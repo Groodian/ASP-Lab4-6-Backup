@@ -1,10 +1,28 @@
 use std::sync::{Arc, Mutex};
 
 pub struct ServerStop {
+    server_thread_stops: Vec<ServerThreadStop>,
+}
+
+pub struct ServerThreadStop {
     should_stop: Arc<Mutex<bool>>,
 }
 
 impl ServerStop {
+    pub fn new(server_thread_stops: Vec<ServerThreadStop>) -> Self {
+        Self {
+            server_thread_stops,
+        }
+    }
+
+    pub fn stop(&self) {
+        for server_stop_thread in &self.server_thread_stops {
+            server_stop_thread.stop();
+        }
+    }
+}
+
+impl ServerThreadStop {
     pub fn new() -> Self {
         Self {
             should_stop: Arc::new(Mutex::new(false)),
@@ -26,7 +44,7 @@ impl ServerStop {
     }
 }
 
-impl Clone for ServerStop {
+impl Clone for ServerThreadStop {
     fn clone(&self) -> Self {
         Self {
             should_stop: Arc::clone(&self.should_stop.clone()),

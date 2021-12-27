@@ -1,4 +1,4 @@
-use crate::net::server_stop::ServerStop;
+use crate::net::server_stop::ServerThreadStop;
 use mio::{event::Event, net::TcpStream, Events, Interest, Poll, Registry, Token, Waker};
 use std::{
     collections::HashMap,
@@ -15,7 +15,7 @@ const DATA: &[u8] = b"Hello world!\n";
 
 pub struct ConnectionThread {
     connection_thread_name: String,
-    server_stop: ServerStop,
+    server_thread_stop: ServerThreadStop,
     waker: Option<Arc<Waker>>,
     new_connections: Arc<Mutex<Vec<TcpStream>>>,
     connection_thread_handle: Option<JoinHandle<()>>,
@@ -25,7 +25,7 @@ impl ConnectionThread {
     pub fn new(connection_thread_name: String) -> Self {
         Self {
             connection_thread_name,
-            server_stop: ServerStop::new(),
+            server_thread_stop: ServerThreadStop::new(),
             waker: None,
             new_connections: Arc::new(Mutex::new(Vec::new())),
             connection_thread_handle: None,
@@ -52,7 +52,7 @@ impl ConnectionThread {
 
         let duration = Some(Duration::from_millis(500));
 
-        let server_stop = self.server_stop.clone();
+        let server_thread_stop = self.server_thread_stop.clone();
         let new_connections = Arc::clone(&self.new_connections);
 
         let connection_thread_name = self.connection_thread_name.clone();
@@ -67,7 +67,7 @@ impl ConnectionThread {
                         poll.poll(&mut events, duration);
 
                         // check if thread should stop
-                        if server_stop.should_stop() {
+                        if server_thread_stop.should_stop() {
                             return;
                         }
 
@@ -241,8 +241,8 @@ impl ConnectionThread {
         }
     }
 
-    pub fn get_server_stop(&self) -> ServerStop {
-        self.server_stop.clone()
+    pub fn get_server_thread_stop(&self) -> ServerThreadStop {
+        self.server_thread_stop.clone()
     }
 
     fn next(current: &mut Token) -> Token {

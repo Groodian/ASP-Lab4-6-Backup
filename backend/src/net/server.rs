@@ -1,4 +1,4 @@
-use crate::net::{connection_thread::ConnectionThread, server_stop::ServerStop};
+use crate::net::{connection_thread::ConnectionThread, server_stop::ServerThreadStop};
 use mio::{net::TcpListener, Events, Interest, Poll, Token};
 use std::{
     io,
@@ -9,13 +9,15 @@ use std::{
     time::Duration,
 };
 
+use super::server_stop::ServerStop;
+
 const SERVER_TOKEN: Token = Token(0);
 const SERVER_THREAD_NAME: &str = "Thread-Main";
 
 pub struct Server {
     connection_thread_amount: usize,
     address: SocketAddr,
-    server_stop: ServerStop,
+    server_thread_stop: ServerThreadStop,
     server_socket_thread_handle: Option<JoinHandle<()>>,
     connection_threads: Arc<Mutex<Vec<ConnectionThread>>>,
 }
@@ -25,13 +27,13 @@ impl Server {
         Self {
             connection_thread_amount,
             address,
-            server_stop: ServerStop::new(),
+            server_thread_stop: ServerThreadStop::new(),
             server_socket_thread_handle: None,
             connection_threads: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&mut self) -> ServerStop {
         // Setup the TCP server socket.
         let mut server_socket =
             TcpListener::bind(self.address).expect("Error while creating server socket!");
@@ -52,7 +54,11 @@ impl Server {
         // Next thread to add conncetion
         let mut next_thread = 0;
 
-        let server_stop = self.server_stop.clone();
+        // Server thread stops
+        let mut server_thread_stops: Vec<ServerThreadStop> = Vec::new();
+        server_thread_stops.push(self.server_thread_stop.clone());
+
+        let server_thread_stop = self.server_thread_stop.clone();
         let connection_threads = Arc::clone(&self.connection_threads);
 
         let connection_thread_amount = self.connection_thread_amount.clone();
@@ -61,6 +67,7 @@ impl Server {
         for i in 0..self.connection_thread_amount {
             let mut connection_thread = ConnectionThread::new(format!("Thread-{}", i));
             connection_thread.start();
+            server_thread_stops.push(connection_thread.get_server_thread_stop());
             connection_threads_guard.push(connection_thread);
         }
         drop(connection_threads_guard);
@@ -75,7 +82,7 @@ impl Server {
                         poll.poll(&mut events, duration);
 
                         // check if thread should stop
-                        if server_stop.should_stop() {
+                        if server_thread_stop.should_stop() {
                             return;
                         }
 
@@ -139,10 +146,8 @@ impl Server {
                 })
                 .expect(format!("Error while creating: {}", SERVER_THREAD_NAME).as_str()),
         );
-    }
 
-    pub fn get_server_stop(&self) -> ServerStop {
-        self.server_stop.clone()
+        ServerStop::new(server_thread_stops)
     }
 
     pub fn join(&mut self) {
@@ -156,10 +161,8 @@ impl Server {
             None => (),
         }
 
+        // If the main thread is stopped, wait until the connection threads stopped.
         let mut connection_threads_guard = self.connection_threads.lock().unwrap();
-        for connection_thread in connection_threads_guard.iter_mut() {
-            connection_thread.get_server_stop().stop();
-        }
         for connection_thread in connection_threads_guard.iter_mut() {
             connection_thread.join();
         }
