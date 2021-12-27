@@ -64,7 +64,11 @@ impl ConnectionThread {
                     println!("[{}] Started.", connection_thread_name);
 
                     loop {
-                        poll.poll(&mut events, duration);
+                        let poll_result = poll.poll(&mut events, duration);
+                        if poll_result.is_err() {
+                            eprintln!("[{}] Error while poll, retrying...", connection_thread_name);
+                            continue;
+                        }
 
                         // check if thread should stop
                         if server_thread_stop.should_stop() {
@@ -80,11 +84,13 @@ impl ConnectionThread {
                                         let mut connection = new_connections.remove(0);
                                         let token = ConnectionThread::next(&mut unique_token);
 
-                                        poll.registry().register(
-                                            &mut connection,
-                                            token,
-                                            Interest::READABLE.add(Interest::WRITABLE),
-                                        );
+                                        poll.registry()
+                                            .register(
+                                                &mut connection,
+                                                token,
+                                                Interest::READABLE.add(Interest::WRITABLE),
+                                            )
+                                            .expect(format!("[{}] Error while registering new connection!",connection_thread_name).as_str());
 
                                         connections.insert(token, connection);
                                     }
@@ -109,10 +115,10 @@ impl ConnectionThread {
                                     match done {
                                         Ok(ok) => {
                                             if ok {
-                                                if let Some(mut connection) =
-                                                    connections.remove(&token)
-                                                {
-                                                    poll.registry().deregister(&mut connection);
+                                                if let Some(mut connection) = connections.remove(&token) {
+                                                    poll.registry()
+                                                        .deregister(&mut connection)
+                                                        .expect(format!("[{}] Error while deregister connection!",connection_thread_name).as_str());
                                                 }
                                             }
                                         }

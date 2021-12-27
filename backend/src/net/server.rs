@@ -11,8 +11,8 @@ use std::{
 
 use super::server_stop::ServerStop;
 
-const SERVER_TOKEN: Token = Token(0);
-const SERVER_THREAD_NAME: &str = "Thread-Main";
+const SERVER_SOCKET_TOKEN: Token = Token(0);
+const MAIN_THREAD_NAME: &str = "Thread-Main";
 
 pub struct Server {
     connection_thread_amount: usize,
@@ -43,7 +43,7 @@ impl Server {
 
         // Register the server with poll we can receive events for it.
         poll.registry()
-            .register(&mut server_socket, SERVER_TOKEN, Interest::READABLE)
+            .register(&mut server_socket, SERVER_SOCKET_TOKEN, Interest::READABLE)
             .expect("Error while registering server socket!");
 
         // Create storage for events.
@@ -74,12 +74,16 @@ impl Server {
 
         self.server_socket_thread_handle = Some(
             thread::Builder::new()
-                .name(SERVER_THREAD_NAME.to_string())
+                .name(MAIN_THREAD_NAME.to_string())
                 .spawn(move || {
-                    println!("[{}] Started.", SERVER_THREAD_NAME);
+                    println!("[{}] Started.", MAIN_THREAD_NAME);
 
                     loop {
-                        poll.poll(&mut events, duration);
+                        let poll_result = poll.poll(&mut events, duration);
+                        if poll_result.is_err() {
+                            eprintln!("[{}] Error while poll, retrying...", MAIN_THREAD_NAME);
+                            continue;
+                        }
 
                         // check if thread should stop
                         if server_thread_stop.should_stop() {
@@ -88,7 +92,7 @@ impl Server {
 
                         for event in events.iter() {
                             match event.token() {
-                                SERVER_TOKEN => loop {
+                                SERVER_SOCKET_TOKEN => loop {
                                     // Received an event for the TCP server socket, which
                                     // indicates we can accept an connection.
                                     let (connection, address) = match server_socket.accept() {
@@ -105,7 +109,7 @@ impl Server {
                                             // wrong and we terminate with an error.
                                             eprintln!(
                                                 "[{}] Unexpected error: {}",
-                                                SERVER_THREAD_NAME, e
+                                                MAIN_THREAD_NAME, e
                                             );
                                             return;
                                         }
@@ -113,7 +117,7 @@ impl Server {
 
                                     println!(
                                         "[{}] Accepted connection from: {}",
-                                        SERVER_THREAD_NAME, address
+                                        MAIN_THREAD_NAME, address
                                     );
 
                                     let connection_threads = connection_threads.lock().unwrap();
@@ -136,7 +140,7 @@ impl Server {
                                     // Should not happen
                                     eprintln!(
                                         "[{}] Unexpected token: {}",
-                                        SERVER_THREAD_NAME, token.0
+                                        MAIN_THREAD_NAME, token.0
                                     );
                                     return;
                                 }
@@ -144,7 +148,7 @@ impl Server {
                         }
                     }
                 })
-                .expect(format!("Error while creating: {}", SERVER_THREAD_NAME).as_str()),
+                .expect(format!("Error while creating: {}", MAIN_THREAD_NAME).as_str()),
         );
 
         ServerStop::new(server_thread_stops)
@@ -155,8 +159,8 @@ impl Server {
 
         match server_socket_thread_handle {
             Some(server_socket_thread_handle) => match server_socket_thread_handle.join() {
-                Ok(_) => println!("[{}] Stopped.", SERVER_THREAD_NAME),
-                Err(_) => eprintln!("[{}] Error while stopping!", SERVER_THREAD_NAME),
+                Ok(_) => println!("[{}] Stopped.", MAIN_THREAD_NAME),
+                Err(_) => eprintln!("[{}] Error while stopping!", MAIN_THREAD_NAME),
             },
             None => (),
         }
