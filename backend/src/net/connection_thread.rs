@@ -1,10 +1,10 @@
+use crate::net::connection::Connection;
 use crate::net::server_stop::ServerThreadStop;
 use mio::{event::Event, net::TcpStream, Events, Interest, Poll, Registry, Token, Waker};
 use std::{
     collections::HashMap,
     io::{self, Read, Write},
     mem::take,
-    str::from_utf8,
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
@@ -40,7 +40,7 @@ impl ConnectionThread {
         let mut events = Events::with_capacity(64);
 
         // Map of `Token` -> `TcpStream`.
-        let mut connections: HashMap<Token, TcpStream> = HashMap::new();
+        let mut connections: HashMap<Token, Connection> = HashMap::new();
 
         // Create waker instance.
         self.waker = Some(Arc::new(
@@ -71,7 +71,7 @@ impl ConnectionThread {
                         }
 
                         // check if thread should stop
-                        if server_thread_stop.should_stop() {
+                        if server_thread_stop.should_stop() {             
                             return;
                         }
 
@@ -88,11 +88,11 @@ impl ConnectionThread {
                                             .register(
                                                 &mut connection,
                                                 token,
-                                                Interest::READABLE.add(Interest::WRITABLE),
+                                                Interest::READABLE,
                                             )
-                                            .expect(format!("[{}] Error while registering new connection!",connection_thread_name).as_str());
+                                            .expect(format!("[{}] Error while registering new connection!", connection_thread_name).as_str());
 
-                                        connections.insert(token, connection);
+                                        connections.insert(token, Connection::new(connection));
                                     }
 
                                     drop(new_connections);
@@ -117,8 +117,8 @@ impl ConnectionThread {
                                             if ok {
                                                 if let Some(mut connection) = connections.remove(&token) {
                                                     poll.registry()
-                                                        .deregister(&mut connection)
-                                                        .expect(format!("[{}] Error while deregister connection!",connection_thread_name).as_str());
+                                                        .deregister(&mut connection.connection)
+                                                        .expect(format!("[{}] Error while deregister connection!", connection_thread_name).as_str());
                                                 }
                                             }
                                         }
@@ -150,12 +150,12 @@ impl ConnectionThread {
     fn handle_connection_event(
         connection_thread_name: &str,
         registry: &Registry,
-        connection: &mut TcpStream,
+        connection: &mut Connection,
         event: &Event,
     ) -> io::Result<bool> {
         if event.is_writable() {
             // We can (maybe) write to the connection.
-            match connection.write(DATA) {
+            match connection.connection.write(DATA) {
                 // We want to write the entire `DATA` buffer in a single go. If we
                 // write less we'll return a short write error (same as
                 // `io::Write::write_all` does).
@@ -163,13 +163,17 @@ impl ConnectionThread {
                 Ok(_) => {
                     // After we've written something we'll reregister the connection
                     // to only respond to readable events.
-                    registry.reregister(connection, event.token(), Interest::READABLE)?
+                    registry.reregister(
+                        &mut connection.connection,
+                        event.token(),
+                        Interest::READABLE,
+                    )?
                 }
                 // Would block "errors" are the OS's way of saying that the
                 // connection is not actually ready to perform this I/O operation.
-                Err(ref err) if ConnectionThread::would_block(err) => {}
+                Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 // Got interrupted (how rude!), we'll try again.
-                Err(ref err) if ConnectionThread::interrupted(err) => {
+                Err(ref err) if err.kind() == io::ErrorKind::Interrupted => {
                     return ConnectionThread::handle_connection_event(
                         connection_thread_name,
                         registry,
@@ -183,52 +187,30 @@ impl ConnectionThread {
         }
 
         if event.is_readable() {
-            let mut connection_closed = false;
-            let mut received_data = vec![0; 4096];
-            let mut bytes_read = 0;
             // We can (maybe) read from the connection.
             loop {
-                match connection.read(&mut received_data[bytes_read..]) {
+                match connection.connection.read(&mut connection.message_factory.buffer[connection.message_factory.buffer_pos..]) {
                     Ok(0) => {
                         // Reading 0 bytes means the other side has closed the
                         // connection or is done writing, then so are we.
-                        connection_closed = true;
-                        break;
+                        println!("[{}] Connection closed.", connection_thread_name);
+                        return Ok(true);
                     }
                     Ok(n) => {
-                        bytes_read += n;
-                        if bytes_read == received_data.len() {
-                            received_data.resize(received_data.len() + 1024, 0);
+                        connection.message_factory.buffer_pos += n;
+
+                        if !connection.message_factory.decode() {
+                            println!("[{}] Invalid data, closing connection...", connection_thread_name);
+                            return Ok(true);
                         }
                     }
                     // Would block "errors" are the OS's way of saying that the
                     // connection is not actually ready to perform this I/O operation.
-                    Err(ref err) if ConnectionThread::would_block(err) => break,
-                    Err(ref err) if ConnectionThread::interrupted(err) => continue,
+                    Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(ref err) if err.kind() == io::ErrorKind::Interrupted => continue,
                     // Other errors we'll consider fatal.
                     Err(err) => return Err(err),
                 }
-            }
-
-            if bytes_read != 0 {
-                let received_data = &received_data[..bytes_read];
-                if let Ok(str_buf) = from_utf8(received_data) {
-                    println!(
-                        "[{}] Received data: {}",
-                        connection_thread_name,
-                        str_buf.trim_end()
-                    );
-                } else {
-                    println!(
-                        "[{}] Received (none UTF-8) data: {:?}",
-                        connection_thread_name, received_data
-                    );
-                }
-            }
-
-            if connection_closed {
-                println!("[{}] Connection closed", connection_thread_name);
-                return Ok(true);
             }
         }
 
@@ -255,13 +237,5 @@ impl ConnectionThread {
         let next = current.0;
         current.0 += 1;
         Token(next)
-    }
-
-    fn would_block(err: &io::Error) -> bool {
-        err.kind() == io::ErrorKind::WouldBlock
-    }
-
-    fn interrupted(err: &io::Error) -> bool {
-        err.kind() == io::ErrorKind::Interrupted
     }
 }

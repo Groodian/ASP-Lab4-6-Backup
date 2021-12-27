@@ -5,7 +5,7 @@ use crate::net::server::Server;
 const THREADS_AMOUNT: usize = 4;
 
 fn main() {
-    let address = "127.0.0.1:9000"
+    let address = "127.0.0.1:4444"
         .parse()
         .expect("Error while parsing address!");
 
