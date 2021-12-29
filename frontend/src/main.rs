@@ -1,35 +1,21 @@
-use std::net::{TcpStream};
-use std::io::{Read, Write};
-use std::str::from_utf8;
+use std::io::prelude::*;
+use std::net::TcpListener;
+use std::net::TcpStream;
 
 fn main() {
-    match TcpStream::connect("localhost:4444") {
-        Ok(mut stream) => {
-            println!("Successfully connected to server in port 4444");
+    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
 
-            let msg = b"Hello!";
+    for stream in listener.incoming() {
+        let stream = stream.unwrap();
 
-            stream.write(msg).unwrap();
-            println!("Sent Hello, awaiting reply...");
-
-            let mut data = [0 as u8; 6]; // using 6 byte buffer
-            match stream.read_exact(&mut data) {
-                Ok(_) => {
-                    if &data == msg {
-                        println!("Reply is ok!");
-                    } else {
-                        let text = from_utf8(&data).unwrap();
-                        println!("Unexpected reply: {}", text);
-                    }
-                },
-                Err(e) => {
-                    println!("Failed to receive data: {}", e);
-                }
-            }
-        },
-        Err(e) => {
-            println!("Failed to connect: {}", e);
-        }
+        handle_connection(stream);
     }
-    println!("Terminated.");
+}
+
+fn handle_connection(mut stream: TcpStream) {
+    let mut buffer = [0; 1024];
+
+    stream.read(&mut buffer).unwrap();
+
+    println!("Request: {}", String::from_utf8_lossy(&buffer[..]));
 }
