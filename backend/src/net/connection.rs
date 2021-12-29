@@ -43,9 +43,10 @@ pub struct Connection {
     pub tcp_stream: TcpStream,
     registry: Rc<Registry>,
     token: Token,
-    message_queue: VecDeque<String>,
-    out_buffer: Vec<u8>,
+    message_queue: VecDeque<(String, u32)>,
+    out_buffer: [u8; MAX_PACKET_SIZE],
     out_buffer_pos: usize,
+    out_buffer_size: usize,
     in_buffer: [u8; MAX_PACKET_SIZE],
     in_buffer_pos: usize,
     // current message decode data/state begin
@@ -62,8 +63,9 @@ impl Connection {
             registry,
             token,
             message_queue: VecDeque::new(),
-            out_buffer: Vec::new(),
+            out_buffer: [0; MAX_PACKET_SIZE],
             out_buffer_pos: 0,
+            out_buffer_size: 0,
             in_buffer: [0; MAX_PACKET_SIZE],
             in_buffer_pos: 0,
             state: MessageDecodeState::WaitingForHeader,
@@ -213,52 +215,49 @@ impl Connection {
             message_number_string.push(self.in_buffer[i] as char);
         }
 
-        match message_number_string.trim_start().parse::<usize>() {
+        match message_number_string.trim_end().parse::<usize>() {
             Ok(read_usize) => Some(read_usize),
             Err(_) => None,
         }
     }
 
-    pub fn send_message(&mut self, message: String) {
-        self.message_queue.push_back(message);
+    pub fn send_message(&mut self, message: String, message_number: u32) {
+        self.message_queue.push_back((message, message_number));
         // return value of send is ignored!!!!
         self.send();
     }
 
     /// Returns `true` if the connection should be removed and closed.
     pub fn send(&mut self) -> bool {
-        let mut should_send = true;
-
-        if self.out_buffer.is_empty() {
-            match self.message_queue.pop_front() {
-                Some(message) => {
-                    self.out_buffer = message.into_bytes();
-                    self.out_buffer_pos = 0;
-                }
-                None => {
-                    // disable send interest
-                    self.registry
-                        .reregister(&mut self.tcp_stream, self.token, Interest::READABLE)
-                        .expect("Error while regegister!");
-                    should_send = false;
+        loop {
+            if self.out_buffer_size == 0 {
+                match self.message_queue.pop_front() {
+                    Some(message) => {
+                        if !self.encode(message.0, message.1) {
+                            eprintln!("Error while encode message!");
+                            return true;
+                        }
+                    }
+                    None => {
+                        // disable send interest
+                        self.registry
+                            .reregister(&mut self.tcp_stream, self.token, Interest::READABLE)
+                            .expect("Error while regegister!");
+                        return false;
+                    }
                 }
             }
-        }
 
-        if should_send {
             // We can (maybe) write to the connection.
             match self
                 .tcp_stream
-                .write(&self.out_buffer[self.out_buffer_pos..])
+                .write(&self.out_buffer[self.out_buffer_pos..self.out_buffer_size])
             {
                 // We want to write the entire `DATA` buffer in a single go. If we
                 // write less we'll return a short write error (same as
                 // `io::Write::write_all` does).
                 Ok(n) => {
-                    if n == self.out_buffer.len() - self.out_buffer_pos {
-                        self.out_buffer.clear();
-                        self.out_buffer_pos = 0;
-                    } else {
+                    if n != self.out_buffer_size - self.out_buffer_pos {
                         self.out_buffer_pos = n;
 
                         // enable send interest
@@ -269,20 +268,64 @@ impl Connection {
                                 Interest::READABLE.add(Interest::WRITABLE),
                             )
                             .expect("Error while regegister!");
+
+                        return false;
+                    } else {
+                        self.out_buffer_size = 0;
+                        self.out_buffer_pos = 0;
+                        // we dont return because we can try to write more messages
                     }
                 }
                 // Would block "errors" are the OS's way of saying that the
                 // connection is not actually ready to perform this I/O operation.
-                Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => return false,
                 // Got interrupted (how rude!), we'll try again.
-                Err(ref err) if err.kind() == io::ErrorKind::Interrupted => {
-                    self.send();
-                }
+                Err(ref err) if err.kind() == io::ErrorKind::Interrupted => return self.send(),
                 // Other errors we'll consider fatal.
                 Err(_) => return true,
             }
         }
+    }
 
-        return false;
+    pub fn encode(&mut self, message: String, message_number: u32) -> bool {
+        let message = message.into_bytes();
+
+        if message.len() > MAX_PAYLOAD {
+            return false;
+        }
+
+        // write magic
+        for i in 0..8 {
+            self.out_buffer[i] = MAGIC[i];
+        }
+
+        // write message number
+        let message_number = message_number.to_string().into_bytes();
+        for i in 0..3 {
+            if i < message_number.len() {
+                self.out_buffer[8 + i] = message_number[i];
+            } else {
+                self.out_buffer[8 + i] = b' ';
+            }
+        }
+
+        // write payload size
+        let payload_size = message.len().to_string().into_bytes();
+        for i in 0..5 {
+            if i < payload_size.len() {
+                self.out_buffer[11 + i] = payload_size[i];
+            } else {
+                self.out_buffer[11 + i] = b' ';
+            }
+        }
+
+        // write payload
+        for i in 0..message.len() {
+            self.out_buffer[16 + i] = message[i];
+        }
+
+        self.out_buffer_size = HEADER_SIZE + message.len();
+        self.out_buffer_pos = 0;
+        return true;
     }
 }
