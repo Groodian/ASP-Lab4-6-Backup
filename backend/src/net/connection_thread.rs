@@ -1,17 +1,16 @@
 use crate::net::connection::Connection;
 use crate::net::server_stop::ServerThreadStop;
-use mio::{event::Event, net::TcpStream, Events, Interest, Poll, Registry, Token, Waker};
+use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
 use std::{
     collections::HashMap,
-    io::{self, Read, Write},
     mem::take,
+    rc::Rc,
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
 const WAKER_TOKEN: Token = Token(0);
-const DATA: &[u8] = b"Hello world!\n";
 
 pub struct ConnectionThread {
     connection_thread_name: String,
@@ -39,9 +38,6 @@ impl ConnectionThread {
         // Create storage for events.
         let mut events = Events::with_capacity(64);
 
-        // Map of `Token` -> `TcpStream`.
-        let mut connections: HashMap<Token, Connection> = HashMap::new();
-
         // Create waker instance.
         self.waker = Some(Arc::new(
             Waker::new(poll.registry(), WAKER_TOKEN).expect("Error while creating waker!"),
@@ -61,6 +57,14 @@ impl ConnectionThread {
             thread::Builder::new()
                 .name(connection_thread_name.to_string())
                 .spawn(move || {
+                    // Map of `Token` -> `TcpStream`.
+                    let mut connections: HashMap<Token, Connection> = HashMap::new();
+
+                    let registry = Rc::new(
+                        poll.registry()
+                            .try_clone()
+                            .expect("Error while clone registry!"),
+                    );
                     println!("[{}] Started.", connection_thread_name);
 
                     loop {
@@ -71,7 +75,7 @@ impl ConnectionThread {
                         }
 
                         // check if thread should stop
-                        if server_thread_stop.should_stop() {             
+                        if server_thread_stop.should_stop() {
                             return;
                         }
 
@@ -85,44 +89,59 @@ impl ConnectionThread {
                                         let token = ConnectionThread::next(&mut unique_token);
 
                                         poll.registry()
-                                            .register(
-                                                &mut connection,
-                                                token,
-                                                Interest::READABLE,
-                                            )
-                                            .expect(format!("[{}] Error while registering new connection!", connection_thread_name).as_str());
+                                            .register(&mut connection, token, Interest::READABLE)
+                                            .expect(
+                                                format!(
+                                                    "[{}] Error while registering new connection!",
+                                                    connection_thread_name
+                                                )
+                                                .as_str(),
+                                            );
 
-                                        connections.insert(token, Connection::new(connection));
+                                        connections.insert(
+                                            token,
+                                            Connection::new(
+                                                connection,
+                                                Rc::clone(&registry),
+                                                token,
+                                            ),
+                                        );
                                     }
 
                                     drop(new_connections);
                                 }
                                 token => {
                                     // Maybe received an event for a TCP connection.
-                                    let done = if let Some(connection) = connections.get_mut(&token)
-                                    {
-                                        ConnectionThread::handle_connection_event(
-                                            connection_thread_name.as_str(),
-                                            poll.registry(),
-                                            connection,
-                                            event,
-                                        )
-                                    } else {
-                                        // Sporadic events happen, we can safely ignore them.
-                                        Ok(false)
-                                    };
+                                    let mut remove_connection = false;
 
-                                    match done {
-                                        Ok(ok) => {
-                                            if ok {
-                                                if let Some(mut connection) = connections.remove(&token) {
-                                                    poll.registry()
-                                                        .deregister(&mut connection.connection)
-                                                        .expect(format!("[{}] Error while deregister connection!", connection_thread_name).as_str());
+                                    match connections.get_mut(&token) {
+                                        Some(connection) => {
+                                            if event.is_writable() {
+                                                remove_connection = connection.send();
+                                            }
+
+                                            if !remove_connection {
+                                                if event.is_readable() {
+                                                    remove_connection = connection.read();
                                                 }
                                             }
                                         }
-                                        Err(_) => (),
+                                        // Sporadic events happen, we can safely ignore them.
+                                        None => {}
+                                    }
+
+                                    if remove_connection {
+                                        if let Some(mut connection) = connections.remove(&token) {
+                                            poll.registry()
+                                                .deregister(&mut connection.tcp_stream)
+                                                .expect(
+                                                    format!(
+                                                        "[{}] Error while deregister connection!",
+                                                        connection_thread_name
+                                                    )
+                                                    .as_str(),
+                                                );
+                                        }
                                     }
                                 }
                             }
@@ -144,77 +163,6 @@ impl ConnectionThread {
             Some(waker) => waker.wake().expect("Error while wake!"),
             None => (),
         }
-    }
-
-    /// Returns `true` if the connection is done.
-    fn handle_connection_event(
-        connection_thread_name: &str,
-        registry: &Registry,
-        connection: &mut Connection,
-        event: &Event,
-    ) -> io::Result<bool> {
-        if event.is_writable() {
-            // We can (maybe) write to the connection.
-            match connection.connection.write(DATA) {
-                // We want to write the entire `DATA` buffer in a single go. If we
-                // write less we'll return a short write error (same as
-                // `io::Write::write_all` does).
-                Ok(n) if n < DATA.len() => return Err(io::ErrorKind::WriteZero.into()),
-                Ok(_) => {
-                    // After we've written something we'll reregister the connection
-                    // to only respond to readable events.
-                    registry.reregister(
-                        &mut connection.connection,
-                        event.token(),
-                        Interest::READABLE,
-                    )?
-                }
-                // Would block "errors" are the OS's way of saying that the
-                // connection is not actually ready to perform this I/O operation.
-                Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                // Got interrupted (how rude!), we'll try again.
-                Err(ref err) if err.kind() == io::ErrorKind::Interrupted => {
-                    return ConnectionThread::handle_connection_event(
-                        connection_thread_name,
-                        registry,
-                        connection,
-                        event,
-                    )
-                }
-                // Other errors we'll consider fatal.
-                Err(err) => return Err(err),
-            }
-        }
-
-        if event.is_readable() {
-            // We can (maybe) read from the connection.
-            loop {
-                match connection.connection.read(&mut connection.message_factory.buffer[connection.message_factory.buffer_pos..]) {
-                    Ok(0) => {
-                        // Reading 0 bytes means the other side has closed the
-                        // connection or is done writing, then so are we.
-                        println!("[{}] Connection closed.", connection_thread_name);
-                        return Ok(true);
-                    }
-                    Ok(n) => {
-                        connection.message_factory.buffer_pos += n;
-
-                        if !connection.message_factory.decode() {
-                            println!("[{}] Invalid data, closing connection...", connection_thread_name);
-                            return Ok(true);
-                        }
-                    }
-                    // Would block "errors" are the OS's way of saying that the
-                    // connection is not actually ready to perform this I/O operation.
-                    Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(ref err) if err.kind() == io::ErrorKind::Interrupted => continue,
-                    // Other errors we'll consider fatal.
-                    Err(err) => return Err(err),
-                }
-            }
-        }
-
-        Ok(false)
     }
 
     pub fn join(&mut self) {
