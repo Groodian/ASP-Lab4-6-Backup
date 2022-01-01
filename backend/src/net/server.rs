@@ -116,8 +116,8 @@ impl Server {
                                     };
 
                                     println!(
-                                        "[{}] Accepted connection from: {}",
-                                        MAIN_THREAD_NAME, address
+                                        "[{}] Accepted connection from: {} and moved to Thread: {}",
+                                        MAIN_THREAD_NAME, address, next_thread
                                     );
 
                                     let connection_threads = connection_threads.lock().unwrap();

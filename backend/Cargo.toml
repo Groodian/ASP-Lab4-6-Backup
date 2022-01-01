@@ -1,7 +1,8 @@
 [package]
-name = "lab4-6"
+name = "rust_chat"
 version = "0.1.0"
 edition = "2021"
+default-run = "rust_chat"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -10,3 +11,7 @@ ctrlc = { version = "3.0", features = ["termination"] }
 mio = { version = "0.8", features = ["os-poll", "net"] }
 serde = { version = "1.0.132", features = ["derive"] }
 serde_json = "1.0.72"
+
+[[bin]]
+name = "performance_test"
+path = "test/performance_test.rs"

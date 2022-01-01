@@ -43,16 +43,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aab8fc367588b89dcee83ab0fd66b72b50b72fa1904d7095045ace2b0c81c35"
 
 [[package]]
-name = "lab4-6"
-version = "0.1.0"
-dependencies = [
- "ctrlc",
- "mio",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.111"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -136,6 +126,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38bc8cc6a5f2e3655e0899c1b848643b2562f853f114bfec7be120678e3ace05"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "rust_chat"
+version = "0.1.0"
+dependencies = [
+ "ctrlc",
+ "mio",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

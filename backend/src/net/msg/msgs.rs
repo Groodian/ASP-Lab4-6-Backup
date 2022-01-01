@@ -20,7 +20,6 @@ pub struct GlobalChatMessage {
 
 impl Message for GlobalChatMessage {
     fn process(&self, connection: &mut Connection) {
-        println!("GlobalChatMessage: {}", self.message);
         let global_chat_message = GlobalChatMessage {
             message: "Hello from Server!".to_string(),
         };

@@ -43,12 +43,13 @@ pub struct Connection {
     pub tcp_stream: TcpStream,
     registry: Rc<Registry>,
     token: Token,
-    message_queue: VecDeque<(String, u32)>,
-    out_buffer: [u8; MAX_PACKET_SIZE],
+    message_queue: VecDeque<(String, u32)>, // has no limit!!!
+    out_buffer: Box<[u8; MAX_PAYLOAD]>,
     out_buffer_pos: usize,
     out_buffer_size: usize,
-    in_buffer: [u8; MAX_PACKET_SIZE],
+    in_buffer: Box<[u8; MAX_PACKET_SIZE]>,
     in_buffer_pos: usize,
+    send_interest: bool,
     // current message decode data/state begin
     state: MessageDecodeState,
     message_number: usize,
@@ -63,11 +64,12 @@ impl Connection {
             registry,
             token,
             message_queue: VecDeque::new(),
-            out_buffer: [0; MAX_PACKET_SIZE],
+            out_buffer: Box::new([0; MAX_PAYLOAD]),
             out_buffer_pos: 0,
             out_buffer_size: 0,
-            in_buffer: [0; MAX_PACKET_SIZE],
+            in_buffer: Box::new([0; MAX_PACKET_SIZE]),
             in_buffer_pos: 0,
+            send_interest: false,
             state: MessageDecodeState::WaitingForHeader,
             message_number: 0,
             payload_size: 0,
@@ -168,7 +170,7 @@ impl Connection {
             None => return false,
         }
 
-        // load payload size
+        // load and check payload size
         match self.get_usize(11, 16) {
             Some(payload_size) => self.payload_size = payload_size,
             None => return false,
@@ -239,37 +241,30 @@ impl Connection {
                         }
                     }
                     None => {
-                        // disable send interest
-                        self.registry
-                            .reregister(&mut self.tcp_stream, self.token, Interest::READABLE)
-                            .expect("Error while regegister!");
+                        if self.send_interest {
+                            // disable send interest
+                            self.send_interest = false;
+                            self.registry
+                                .reregister(&mut self.tcp_stream, self.token, Interest::READABLE)
+                                .expect("Error while regegister!");
+                        }
+
                         return false;
                     }
                 }
             }
+
+            let mut set_send_interest = false;
 
             // We can (maybe) write to the connection.
             match self
                 .tcp_stream
                 .write(&self.out_buffer[self.out_buffer_pos..self.out_buffer_size])
             {
-                // We want to write the entire `DATA` buffer in a single go. If we
-                // write less we'll return a short write error (same as
-                // `io::Write::write_all` does).
                 Ok(n) => {
                     if n != self.out_buffer_size - self.out_buffer_pos {
                         self.out_buffer_pos = n;
-
-                        // enable send interest
-                        self.registry
-                            .reregister(
-                                &mut self.tcp_stream,
-                                self.token,
-                                Interest::READABLE.add(Interest::WRITABLE),
-                            )
-                            .expect("Error while regegister!");
-
-                        return false;
+                        set_send_interest = true;
                     } else {
                         self.out_buffer_size = 0;
                         self.out_buffer_pos = 0;
@@ -278,11 +273,28 @@ impl Connection {
                 }
                 // Would block "errors" are the OS's way of saying that the
                 // connection is not actually ready to perform this I/O operation.
-                Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => return false,
+                Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => set_send_interest = true,
                 // Got interrupted (how rude!), we'll try again.
                 Err(ref err) if err.kind() == io::ErrorKind::Interrupted => return self.send(),
                 // Other errors we'll consider fatal.
                 Err(_) => return true,
+            }
+
+            // enable send interest if not already set
+            if set_send_interest {
+                if !self.send_interest {
+                    // enable send interest
+                    self.send_interest = true;
+                    self.registry
+                        .reregister(
+                            &mut self.tcp_stream,
+                            self.token,
+                            Interest::READABLE.add(Interest::WRITABLE),
+                        )
+                        .expect("Error while regegister!");
+                }
+
+                return false;
             }
         }
     }

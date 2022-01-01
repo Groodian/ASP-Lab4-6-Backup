@@ -44,7 +44,7 @@ impl ConnectionThread {
         ));
 
         // Unique token for each incoming connection.
-        let mut unique_token = Token(WAKER_TOKEN.0 + 1);
+        let mut next_token = Token(WAKER_TOKEN.0 + 1);
 
         let duration = Some(Duration::from_millis(500));
 
@@ -86,10 +86,13 @@ impl ConnectionThread {
 
                                     for _ in 0..new_connections.len() {
                                         let mut connection = new_connections.remove(0);
-                                        let token = ConnectionThread::next(&mut unique_token);
 
                                         poll.registry()
-                                            .register(&mut connection, token, Interest::READABLE)
+                                            .register(
+                                                &mut connection,
+                                                next_token,
+                                                Interest::READABLE,
+                                            )
                                             .expect(
                                                 format!(
                                                     "[{}] Error while registering new connection!",
@@ -99,13 +102,15 @@ impl ConnectionThread {
                                             );
 
                                         connections.insert(
-                                            token,
+                                            next_token,
                                             Connection::new(
                                                 connection,
                                                 Rc::clone(&registry),
-                                                token,
+                                                next_token,
                                             ),
                                         );
+
+                                        next_token = Token(next_token.0 + 1);
                                     }
 
                                     drop(new_connections);
@@ -179,11 +184,5 @@ impl ConnectionThread {
 
     pub fn get_server_thread_stop(&self) -> ServerThreadStop {
         self.server_thread_stop.clone()
-    }
-
-    fn next(current: &mut Token) -> Token {
-        let next = current.0;
-        current.0 += 1;
-        Token(next)
     }
 }

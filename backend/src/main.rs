@@ -1,6 +1,4 @@
-pub mod net;
-
-use crate::net::server::Server;
+use rust_chat::net::server::Server;
 
 const THREADS_AMOUNT: usize = 4;
 
