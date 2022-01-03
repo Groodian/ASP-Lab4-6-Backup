@@ -1,5 +1,4 @@
-use crate::net::msg::msgs::GlobalChatMessage;
-use crate::net::msg::msgs::Message;
+use crate::net::msg::msgs::{GlobalChatMessage, Message, MessageTrait};
 use mio::{net::TcpStream, Interest, Registry, Token};
 use std::rc::Rc;
 use std::{
@@ -43,7 +42,7 @@ pub struct Connection {
     pub tcp_stream: TcpStream,
     registry: Rc<Registry>,
     token: Token,
-    message_queue: VecDeque<(String, u32)>, // has no limit!!!
+    message_queue: VecDeque<Message>, // has no limit!!!
     out_buffer: Box<[u8; MAX_PAYLOAD]>,
     out_buffer_pos: usize,
     out_buffer_size: usize,
@@ -223,8 +222,8 @@ impl Connection {
         }
     }
 
-    pub fn send_message(&mut self, message: String, message_number: u32) {
-        self.message_queue.push_back((message, message_number));
+    pub fn send_message(&mut self, message: Message) {
+        self.message_queue.push_back(message);
         // return value of send is ignored!!!!
         self.send();
     }
@@ -235,7 +234,7 @@ impl Connection {
             if self.out_buffer_size == 0 {
                 match self.message_queue.pop_front() {
                     Some(message) => {
-                        if !self.encode(message.0, message.1) {
+                        if !self.encode(message.message, message.number) {
                             eprintln!("Error while encode message!");
                             return true;
                         }

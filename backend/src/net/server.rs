@@ -1,4 +1,8 @@
-use crate::net::{connection_thread::ConnectionThread, server_stop::ServerThreadStop};
+use crate::net::{
+    connection_thread::ConnectionThread,
+    msg::msgs::Message,
+    server_stop::{ServerStop, ServerThreadStop},
+};
 use mio::{net::TcpListener, Events, Interest, Poll, Token};
 use std::{
     io,
@@ -8,8 +12,6 @@ use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
-
-use super::server_stop::ServerStop;
 
 const SERVER_SOCKET_TOKEN: Token = Token(0);
 const MAIN_THREAD_NAME: &str = "Thread-Main";
@@ -152,6 +154,14 @@ impl Server {
         );
 
         ServerStop::new(server_thread_stops)
+    }
+
+    pub fn broadcast_message(&self, message: Message) {
+        let mut connection_threads_guard = self.connection_threads.lock().unwrap();
+        for connection_thread in connection_threads_guard.iter_mut() {
+            connection_thread.broadcast_message(message.clone());
+        }
+        drop(connection_threads_guard);
     }
 
     pub fn join(&mut self) {
