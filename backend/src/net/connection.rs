@@ -1,4 +1,5 @@
 use crate::net::msg::msgs::{GlobalChatMessage, Message, MessageTrait};
+use crate::net::server::ServerBroadcastMessage;
 use mio::{net::TcpStream, Interest, Registry, Token};
 use std::rc::Rc;
 use std::{
@@ -40,6 +41,7 @@ enum MessageDecodeState {
 
 pub struct Connection {
     pub tcp_stream: TcpStream,
+        pub server_broadcast_message: ServerBroadcastMessage,
     registry: Rc<Registry>,
     token: Token,
     message_queue: VecDeque<Message>, // has no limit!!!
@@ -57,9 +59,15 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new(tcp_stream: TcpStream, registry: Rc<Registry>, token: Token) -> Self {
+    pub fn new(
+        tcp_stream: TcpStream,
+        server_broadcast_message: ServerBroadcastMessage,
+        registry: Rc<Registry>,
+        token: Token,
+    ) -> Self {
         Self {
             tcp_stream,
+            server_broadcast_message,
             registry,
             token,
             message_queue: VecDeque::new(),

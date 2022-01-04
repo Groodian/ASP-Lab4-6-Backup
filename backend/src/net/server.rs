@@ -5,15 +5,17 @@ use crate::net::{
 };
 use mio::{net::TcpListener, Events, Interest, Poll, Token, Waker};
 use std::{
+    collections::VecDeque,
     io,
     mem::take,
     net::SocketAddr,
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
-    time::Duration, collections::VecDeque,
+    time::Duration,
 };
 
 const SERVER_SOCKET_TOKEN: Token = Token(0);
+const WAKER_TOKEN_BROADCAST: Token = Token(1);
 const MAIN_THREAD_NAME: &str = "Thread-Main";
 
 pub struct Server {
@@ -24,10 +26,37 @@ pub struct Server {
     connection_threads: Arc<Mutex<Vec<ConnectionThread>>>,
 }
 
-struct ServerBroadcastMessage {
+pub struct ServerBroadcastMessage {
     waker: Arc<Waker>,
     messages_queue: Arc<Mutex<VecDeque<Message>>>,
+}
 
+impl ServerBroadcastMessage {
+    pub fn new(waker: Arc<Waker>) -> Self {
+        Self {
+            waker,
+            messages_queue: Arc::new(Mutex::new(VecDeque::new())),
+        }
+    }
+
+    pub fn broadcast_message(&self, message: Message) {
+        let mut broadcast_messages = self.messages_queue.lock().unwrap();
+
+        broadcast_messages.push_back(message);
+
+        drop(broadcast_messages);
+
+        self.waker.wake().expect("Error while wake!");
+    }
+}
+
+impl Clone for ServerBroadcastMessage {
+    fn clone(&self) -> Self {
+        Self {
+            waker: Arc::clone(&self.waker),
+            messages_queue: Arc::clone(&self.messages_queue),
+        }
+    }
 }
 
 impl Server {
@@ -57,6 +86,14 @@ impl Server {
         // Create storage for events.
         let mut events = Events::with_capacity(64);
 
+        // Create waker broadcast instance.
+        let waker = Arc::new(
+            Waker::new(poll.registry(), WAKER_TOKEN_BROADCAST)
+                .expect("Error while creating waker!"),
+        );
+
+        let server_broadcast_message = ServerBroadcastMessage::new(waker);
+
         let duration = Some(Duration::from_millis(500));
 
         // Next thread to add conncetion
@@ -73,7 +110,8 @@ impl Server {
 
         let mut connection_threads_guard = connection_threads.lock().unwrap();
         for i in 0..self.connection_thread_amount {
-            let mut connection_thread = ConnectionThread::new(format!("Thread-{}", i));
+            let mut connection_thread =
+                ConnectionThread::new(format!("Thread-{}", i), server_broadcast_message.clone());
             connection_thread.start();
             server_thread_stops.push(connection_thread.get_server_thread_stop());
             connection_threads_guard.push(connection_thread);
@@ -144,6 +182,28 @@ impl Server {
 
                                     drop(connection_threads);
                                 },
+                                WAKER_TOKEN_BROADCAST => {
+                                    let mut connection_threads_guard =
+                                        connection_threads.lock().unwrap();
+                                    let mut messages_queue_guard =
+                                        server_broadcast_message.messages_queue.lock().unwrap();
+
+                                    loop {
+                                        match messages_queue_guard.pop_front() {
+                                            Some(message) => {
+                                                for connection_thread in
+                                                    connection_threads_guard.iter_mut()
+                                                {
+                                                    connection_thread
+                                                        .broadcast_message(message.clone());
+                                                }
+                                            }
+                                            None => break,
+                                        }
+                                    }
+
+                                    drop(connection_threads_guard);
+                                }
                                 token => {
                                     // Should not happen
                                     eprintln!(
@@ -160,14 +220,6 @@ impl Server {
         );
 
         ServerStop::new(server_thread_stops)
-    }
-
-    pub fn broadcast_message(&self, message: Message) {
-        let mut connection_threads_guard = self.connection_threads.lock().unwrap();
-        for connection_thread in connection_threads_guard.iter_mut() {
-            connection_thread.broadcast_message(message.clone());
-        }
-        drop(connection_threads_guard);
     }
 
     pub fn join(&mut self) {

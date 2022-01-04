@@ -42,7 +42,9 @@ impl MessageTrait for GlobalChatMessage {
         let global_chat_message = GlobalChatMessage {
             message: "Hello from Server!".to_string(),
         };
-        connection.send_message(Message::new(global_chat_message));
+        connection
+            .server_broadcast_message
+            .broadcast_message(Message::new(global_chat_message));
     }
 
     fn number(&self) -> u32 {

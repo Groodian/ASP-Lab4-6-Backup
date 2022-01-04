@@ -1,4 +1,4 @@
-use crate::net::{connection::Connection, msg::msgs::Message, server_stop::ServerThreadStop};
+use crate::net::{connection::Connection, msg::msgs::Message, server_stop::ServerThreadStop, server::ServerBroadcastMessage};
 use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
 use std::{
     collections::{HashMap, VecDeque},
@@ -14,6 +14,7 @@ const WAKER_TOKEN_BROADCAST: Token = Token(1);
 
 pub struct ConnectionThread {
     connection_thread_name: String,
+    server_broadcast_message: ServerBroadcastMessage,
     server_thread_stop: ServerThreadStop,
     waker_connection: Option<Arc<Waker>>,
     waker_broadcast: Option<Arc<Waker>>,
@@ -23,9 +24,10 @@ pub struct ConnectionThread {
 }
 
 impl ConnectionThread {
-    pub fn new(connection_thread_name: String) -> Self {
+    pub fn new(connection_thread_name: String, server_broadcast_message: ServerBroadcastMessage) -> Self {
         Self {
             connection_thread_name,
+            server_broadcast_message,
             server_thread_stop: ServerThreadStop::new(),
             waker_connection: None,
             waker_broadcast: None,
@@ -62,6 +64,7 @@ impl ConnectionThread {
         let server_thread_stop = self.server_thread_stop.clone();
         let new_connections = Arc::clone(&self.new_connections);
         let broadcast_messages = Arc::clone(&self.broadcast_messages);
+        let server_broadcast_message = self.server_broadcast_message.clone();
 
         let connection_thread_name = self.connection_thread_name.clone();
 
@@ -119,6 +122,7 @@ impl ConnectionThread {
                                                 next_token,
                                                 Connection::new(
                                                     connection,
+                                                    server_broadcast_message.clone(),
                                                     Rc::clone(&registry),
                                                     next_token,
                                                 ),
