@@ -3,14 +3,14 @@ use crate::net::{
     msg::msgs::Message,
     server_stop::{ServerStop, ServerThreadStop},
 };
-use mio::{net::TcpListener, Events, Interest, Poll, Token};
+use mio::{net::TcpListener, Events, Interest, Poll, Token, Waker};
 use std::{
     io,
     mem::take,
     net::SocketAddr,
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
-    time::Duration,
+    time::Duration, collections::VecDeque,
 };
 
 const SERVER_SOCKET_TOKEN: Token = Token(0);
@@ -22,6 +22,12 @@ pub struct Server {
     server_thread_stop: ServerThreadStop,
     server_socket_thread_handle: Option<JoinHandle<()>>,
     connection_threads: Arc<Mutex<Vec<ConnectionThread>>>,
+}
+
+struct ServerBroadcastMessage {
+    waker: Arc<Waker>,
+    messages_queue: Arc<Mutex<VecDeque<Message>>>,
+
 }
 
 impl Server {

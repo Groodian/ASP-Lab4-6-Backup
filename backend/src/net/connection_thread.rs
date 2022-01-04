@@ -1,7 +1,7 @@
 use crate::net::{connection::Connection, msg::msgs::Message, server_stop::ServerThreadStop};
 use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     mem::take,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -17,8 +17,8 @@ pub struct ConnectionThread {
     server_thread_stop: ServerThreadStop,
     waker_connection: Option<Arc<Waker>>,
     waker_broadcast: Option<Arc<Waker>>,
-    new_connections: Arc<Mutex<Vec<TcpStream>>>,
-    broadcast_messages: Arc<Mutex<Vec<Message>>>,
+    new_connections: Arc<Mutex<VecDeque<TcpStream>>>,
+    broadcast_messages: Arc<Mutex<VecDeque<Message>>>,
     connection_thread_handle: Option<JoinHandle<()>>,
 }
 
@@ -29,8 +29,8 @@ impl ConnectionThread {
             server_thread_stop: ServerThreadStop::new(),
             waker_connection: None,
             waker_broadcast: None,
-            new_connections: Arc::new(Mutex::new(Vec::new())),
-            broadcast_messages: Arc::new(Mutex::new(Vec::new())),
+            new_connections: Arc::new(Mutex::new(VecDeque::new())),
+            broadcast_messages: Arc::new(Mutex::new(VecDeque::new())),
             connection_thread_handle: None,
         }
     }
@@ -96,33 +96,40 @@ impl ConnectionThread {
                                 WAKER_TOKEN_CONNECTION => {
                                     let mut new_connections = new_connections.lock().unwrap();
 
-                                    for _ in 0..new_connections.len() {
-                                        let mut connection = new_connections.remove(0);
+                                    loop {
 
-                                        poll.registry()
-                                            .register(
-                                                &mut connection,
-                                                next_token,
-                                                Interest::READABLE,
-                                            )
-                                            .expect(
-                                                format!(
-                                                    "[{}] Error while registering new connection!",
-                                                    connection_thread_name
+                                        match  new_connections.pop_front(){
+                                            Some(connection) => {
+                                                let mut connection = connection;
+                                                poll.registry()
+                                                .register(
+                                                    &mut connection,
+                                                    next_token,
+                                                    Interest::READABLE,
                                                 )
-                                                .as_str(),
-                                            );
-
-                                        connections.insert(
-                                            next_token,
-                                            Connection::new(
-                                                connection,
-                                                Rc::clone(&registry),
+                                                .expect(
+                                                    format!(
+                                                        "[{}] Error while registering new connection!",
+                                                        connection_thread_name
+                                                    )
+                                                    .as_str(),
+                                                );
+    
+                                            connections.insert(
                                                 next_token,
-                                            ),
-                                        );
+                                                Connection::new(
+                                                    connection,
+                                                    Rc::clone(&registry),
+                                                    next_token,
+                                                ),
+                                            );
+    
+                                            next_token = Token(next_token.0 + 1);
+                                            },
+                                            None => break,
+                                        } 
 
-                                        next_token = Token(next_token.0 + 1);
+
                                     }
 
                                     drop(new_connections);
@@ -130,11 +137,14 @@ impl ConnectionThread {
                                 WAKER_TOKEN_BROADCAST => {
                                     let mut broadcast_messages = broadcast_messages.lock().unwrap();
 
-                                    for _ in 0..broadcast_messages.len() {
-                                        let message = broadcast_messages.remove(0);
-
-                                        for connection in connections.iter_mut() {
-                                            connection.1.send_message(message.clone());
+                                    loop {
+                                        match broadcast_messages.pop_front() {
+                                            Some(message) => {
+                                                for connection in connections.iter_mut() {
+                                                    connection.1.send_message(message.clone());
+                                                }
+                                            },
+                                            None => break,
                                         }
                                     }
 
@@ -185,7 +195,7 @@ impl ConnectionThread {
     pub fn add_connection(&self, connection: TcpStream) {
         let mut new_connections = self.new_connections.lock().unwrap();
 
-        new_connections.push(connection);
+        new_connections.push_back(connection);
 
         drop(new_connections);
 
@@ -198,7 +208,7 @@ impl ConnectionThread {
     pub fn broadcast_message(&self, message: Message) {
         let mut broadcast_messages = self.broadcast_messages.lock().unwrap();
 
-        broadcast_messages.push(message);
+        broadcast_messages.push_back(message);
 
         drop(broadcast_messages);
 
