@@ -7,7 +7,6 @@ use mio::{net::TcpListener, Events, Interest, Poll, Token, Waker};
 use std::{
     collections::VecDeque,
     io,
-    mem::take,
     net::SocketAddr,
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
@@ -223,9 +222,7 @@ impl Server {
     }
 
     pub fn join(&mut self) {
-        let server_socket_thread_handle = take(&mut self.server_socket_thread_handle);
-
-        match server_socket_thread_handle {
+        match self.server_socket_thread_handle.take() {
             Some(server_socket_thread_handle) => match server_socket_thread_handle.join() {
                 Ok(_) => println!("[{}] Stopped.", MAIN_THREAD_NAME),
                 Err(_) => eprintln!("[{}] Error while stopping!", MAIN_THREAD_NAME),

@@ -2,7 +2,6 @@ use crate::net::{connection::Connection, msg::message::Message, server_stop::Ser
 use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
 use std::{
     collections::{HashMap, VecDeque},
-    mem::take,
     rc::Rc,
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
@@ -215,9 +214,7 @@ impl ConnectionThread {
     }
 
     pub fn join(&mut self) {
-        let connection_thread_handle = take(&mut self.connection_thread_handle);
-
-        match connection_thread_handle {
+        match self.connection_thread_handle.take() {
             Some(connection_thread_handle) => match connection_thread_handle.join() {
                 Ok(_) => println!("[{}] Stopped.", self.connection_thread_name),
                 Err(_) => eprintln!("[{}] Error while stopping!", self.connection_thread_name),

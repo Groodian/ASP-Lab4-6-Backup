@@ -1,5 +1,5 @@
 use crate::net::connection::Connection;
-use crate::net::msg::message::{Message, MessageTrait};
+use crate::net::message::{Message, MessageTrait};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -31,12 +31,8 @@ pub struct GlobalChatMessage {
 }
 
 impl MessageTrait for GlobalChatMessage {
-    fn process(self, connection: &mut Connection) {
-        let reply = GlobalChatMessage {
-            name: self.name,
-            message: self.message,
-        };
-        connection.server_broadcast_message(Message::new(reply));
+    fn process(self, _: &mut Connection) {
+        println!("{}: {}", self.name, self.message);
     }
 
     fn number(&self) -> u32 {
