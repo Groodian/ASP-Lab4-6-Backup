@@ -1,4 +1,4 @@
-use crate::net::{connection::Connection, msg::msgs::Message, server_stop::ServerThreadStop, server::ServerBroadcastMessage};
+use crate::net::{connection::Connection, msg::message::Message, server_stop::ServerThreadStop, server::ServerBroadcastMessage};
 use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
 use std::{
     collections::{HashMap, VecDeque},
@@ -9,15 +9,13 @@ use std::{
     time::Duration,
 };
 
-const WAKER_TOKEN_CONNECTION: Token = Token(0);
-const WAKER_TOKEN_BROADCAST: Token = Token(1);
+const WAKER_TOKEN: Token = Token(0);
 
 pub struct ConnectionThread {
     connection_thread_name: String,
     server_broadcast_message: ServerBroadcastMessage,
     server_thread_stop: ServerThreadStop,
-    waker_connection: Option<Arc<Waker>>,
-    waker_broadcast: Option<Arc<Waker>>,
+    waker: Option<Arc<Waker>>,
     new_connections: Arc<Mutex<VecDeque<TcpStream>>>,
     broadcast_messages: Arc<Mutex<VecDeque<Message>>>,
     connection_thread_handle: Option<JoinHandle<()>>,
@@ -29,8 +27,7 @@ impl ConnectionThread {
             connection_thread_name,
             server_broadcast_message,
             server_thread_stop: ServerThreadStop::new(),
-            waker_connection: None,
-            waker_broadcast: None,
+            waker: None,
             new_connections: Arc::new(Mutex::new(VecDeque::new())),
             broadcast_messages: Arc::new(Mutex::new(VecDeque::new())),
             connection_thread_handle: None,
@@ -45,14 +42,8 @@ impl ConnectionThread {
         let mut events = Events::with_capacity(64);
 
         // Create waker connection instance.
-        self.waker_connection = Some(Arc::new(
-            Waker::new(poll.registry(), WAKER_TOKEN_CONNECTION)
-                .expect("Error while creating waker!"),
-        ));
-
-        // Create waker broadcast instance.
-        self.waker_broadcast = Some(Arc::new(
-            Waker::new(poll.registry(), WAKER_TOKEN_BROADCAST)
+        self.waker = Some(Arc::new(
+            Waker::new(poll.registry(), WAKER_TOKEN)
                 .expect("Error while creating waker!"),
         ));
 
@@ -96,7 +87,8 @@ impl ConnectionThread {
 
                         for event in events.iter() {
                             match event.token() {
-                                WAKER_TOKEN_CONNECTION => {
+                                WAKER_TOKEN => {
+                                    // check for new connections
                                     let mut new_connections = new_connections.lock().unwrap();
 
                                     loop {
@@ -137,8 +129,8 @@ impl ConnectionThread {
                                     }
 
                                     drop(new_connections);
-                                }
-                                WAKER_TOKEN_BROADCAST => {
+
+                                    // check for broadcast messages
                                     let mut broadcast_messages = broadcast_messages.lock().unwrap();
 
                                     loop {
@@ -175,9 +167,9 @@ impl ConnectionThread {
                                     }
 
                                     if remove_connection {
-                                        if let Some(mut connection) = connections.remove(&token) {
+                                        if let Some(connection) = connections.remove(&token) {
                                             poll.registry()
-                                                .deregister(&mut connection.tcp_stream)
+                                                .deregister(&mut connection.tcp_stream())
                                                 .expect(
                                                     format!(
                                                         "[{}] Error while deregister connection!",
@@ -203,7 +195,7 @@ impl ConnectionThread {
 
         drop(new_connections);
 
-        match &self.waker_connection {
+        match &self.waker {
             Some(waker) => waker.wake().expect("Error while wake!"),
             None => (),
         }
@@ -216,7 +208,7 @@ impl ConnectionThread {
 
         drop(broadcast_messages);
 
-        match &self.waker_broadcast {
+        match &self.waker {
             Some(waker) => waker.wake().expect("Error while wake!"),
             None => (),
         }

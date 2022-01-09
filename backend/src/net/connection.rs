@@ -1,4 +1,5 @@
-use crate::net::msg::msgs::{GlobalChatMessage, Message, MessageTrait};
+use crate::net::msg::message::{Message, MessageTrait};
+use crate::net::msg::messages::{GlobalChatMessage, PingMessage};
 use crate::net::server::ServerBroadcastMessage;
 use mio::{net::TcpStream, Interest, Registry, Token};
 use std::rc::Rc;
@@ -40,8 +41,8 @@ enum MessageDecodeState {
 }
 
 pub struct Connection {
-    pub tcp_stream: TcpStream,
-        pub server_broadcast_message: ServerBroadcastMessage,
+    tcp_stream: TcpStream,
+    server_broadcast_message: ServerBroadcastMessage,
     registry: Rc<Registry>,
     token: Token,
     message_queue: VecDeque<Message>, // has no limit!!!
@@ -200,7 +201,8 @@ impl Connection {
         // parse json and check message number
         match from_utf8(&self.in_buffer[HEADER_SIZE..self.payload_size + HEADER_SIZE]) {
             Ok(utf8_payload) => match self.message_number {
-                0 => ProcessMessage!(GlobalChatMessage, utf8_payload, self),
+                0 => ProcessMessage!(PingMessage, utf8_payload, self),
+                1 => ProcessMessage!(GlobalChatMessage, utf8_payload, self),
                 _ => return false,
             },
             Err(_) => return false,
@@ -346,5 +348,13 @@ impl Connection {
         self.out_buffer_size = HEADER_SIZE + message.len();
         self.out_buffer_pos = 0;
         return true;
+    }
+
+    pub fn server_broadcast_message(&self, message: Message) {
+        self.server_broadcast_message.broadcast_message(message);
+    }
+
+    pub fn tcp_stream(self) -> TcpStream {
+        self.tcp_stream
     }
 }

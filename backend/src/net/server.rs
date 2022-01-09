@@ -1,6 +1,6 @@
 use crate::net::{
     connection_thread::ConnectionThread,
-    msg::msgs::Message,
+    msg::message::Message,
     server_stop::{ServerStop, ServerThreadStop},
 };
 use mio::{net::TcpListener, Events, Interest, Poll, Token, Waker};

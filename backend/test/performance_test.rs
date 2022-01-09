@@ -9,8 +9,8 @@ use std::{
 
 // 4 is an optimal test value for a 16 thread cpu
 const THREADS_AMOUNT: usize = 4;
-const OUT_MESSAGE: &[u8; 42] = b"RustChat0  26   {\"message\":\"Hello World!\"}";
-const IN_MESSAGE: &[u8; 48] = b"RustChat0  32   {\"message\":\"Hello from Server!\"}";
+const BUFFER_SIZE: usize = 100;
+const BUFFER_HEAD: &[u8; 11] = b"RustChat0  ";
 
 macro_rules! PerformanceTest {
     ($function:ident) => {
@@ -58,35 +58,79 @@ fn create_stream() -> TcpStream {
     return stream;
 }
 
-fn write(stream: &mut TcpStream, messages_amount: u32) {
+fn init_buffer() -> [u8; BUFFER_SIZE] {
+    let mut buffer = [0; BUFFER_SIZE];
+
+    for i in 0..11 {
+        buffer[i] = BUFFER_HEAD[i];
+    }
+
+    return buffer;
+}
+
+fn encode(buffer: &mut [u8; BUFFER_SIZE], nonce: u32, reply: bool) -> usize {
+    let payload = format!("{{\"nonce\":{},\"reply\":{}}}", nonce, reply).into_bytes();
+
+    let payload_size = payload.len().to_string().into_bytes();
+    for i in 0..5 {
+        if i < payload_size.len() {
+            buffer[11 + i] = payload_size[i];
+        } else {
+            buffer[11 + i] = b' ';
+        }
+    }
+
+    for i in 0..payload.len() {
+        buffer[16 + i] = payload[i];
+    }
+
+    return 16 + payload.len();
+}
+
+fn write(
+    stream: &mut TcpStream,
+    buffer: &mut [u8; BUFFER_SIZE],
+    mut nonce: u32,
+    messages_amount: u32,
+) {
     for _ in 0..messages_amount {
+        let out_buffer_size = encode(buffer, nonce, false);
         let mut out_buffer_pos = 0;
+
         loop {
-            match stream.write(&OUT_MESSAGE[out_buffer_pos..]) {
+            match stream.write(&buffer[out_buffer_pos..out_buffer_size]) {
                 Ok(0) => break,
                 Ok(n) => {
                     out_buffer_pos += n;
-                    if out_buffer_pos == 42 {
+                    if out_buffer_pos == out_buffer_size {
                         break;
                     }
                 }
                 Err(err) => panic!("{}", err),
             }
         }
+        nonce += 1;
     }
 }
 
-fn read(stream: &mut TcpStream, messages_amount: u32) {
+fn read(
+    stream: &mut TcpStream,
+    buffer: &mut [u8; BUFFER_SIZE],
+    read_buffer: &mut [u8; BUFFER_SIZE],
+    mut nonce: u32,
+    messages_amount: u32,
+) {
     let mut total_recv = 0;
     for _ in 0..messages_amount {
-        let in_buffer: &mut [u8; 48] = &mut [0; 48];
+        let in_buffer_size = encode(buffer, nonce, true);
         let mut in_buffer_pos = 0;
+
         loop {
-            match stream.read(&mut in_buffer[in_buffer_pos..]) {
+            match stream.read(&mut read_buffer[in_buffer_pos..in_buffer_size]) {
                 Ok(0) => break,
                 Ok(n) => {
                     in_buffer_pos += n;
-                    if in_buffer_pos == 48 {
+                    if in_buffer_pos == in_buffer_size {
                         break;
                     }
                 }
@@ -95,10 +139,12 @@ fn read(stream: &mut TcpStream, messages_amount: u32) {
             }
         }
 
-        if in_buffer_pos == 48 {
-            assert_eq!(IN_MESSAGE, in_buffer);
+        if in_buffer_pos == in_buffer_size {
+            assert_eq!(buffer[..in_buffer_size], read_buffer[..in_buffer_size]);
             total_recv += 1;
         }
+
+        nonce += 1;
     }
 
     assert_eq!(messages_amount, total_recv);
@@ -107,19 +153,31 @@ fn read(stream: &mut TcpStream, messages_amount: u32) {
 fn test_server_performace_single() {
     let mut stream = create_stream();
 
-    for _ in 0..100000 {
-        write(&mut stream, 1);
+    let buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+    let read_buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+    let mut nonce: u32 = 0;
 
-        read(&mut stream, 1);
+    for _ in 0..100000 {
+        write(&mut stream, buffer, nonce, 1);
+
+        read(&mut stream, buffer, read_buffer, nonce, 1);
+
+        nonce += 1;
     }
 }
 
 fn test_server_performace_single_batch() {
     let mut stream = create_stream();
 
-    write(&mut stream, 100000);
+    let buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+    let read_buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+    let nonce: u32 = 0;
 
-    read(&mut stream, 100000);
+    write(&mut stream, buffer, nonce, 100000);
+
+    println!("{}", nonce);
+
+    read(&mut stream, buffer, read_buffer, nonce, 100000);
 }
 
 fn test_server_performace_multi() {
@@ -128,10 +186,16 @@ fn test_server_performace_multi() {
         let handle = thread::spawn(|| {
             let mut stream = create_stream();
 
-            for _ in 0..100000 {
-                write(&mut stream, 1);
+            let buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+            let read_buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+            let mut nonce: u32 = 0;
 
-                read(&mut stream, 1);
+            for _ in 0..100000 {
+                write(&mut stream, buffer, nonce, 1);
+
+                read(&mut stream, buffer, read_buffer, nonce, 1);
+
+                nonce += 1;
             }
         });
         handels.push(handle);
@@ -149,9 +213,13 @@ fn test_server_performace_multi_batch() {
         let handle = thread::spawn(|| {
             let mut stream = create_stream();
 
-            write(&mut stream, 100000);
+            let buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+            let read_buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+            let nonce: u32 = 0;
 
-            read(&mut stream, 100000);
+            write(&mut stream, buffer, nonce, 100000);
+
+            read(&mut stream, buffer, read_buffer, nonce, 100000);
         });
         handels.push(handle);
     }
@@ -167,10 +235,16 @@ fn test_server_performace_massive() {
         let handle = thread::spawn(|| {
             let mut stream = create_stream();
 
-            for _ in 0..100000 {
-                write(&mut stream, 1);
+            let buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+            let read_buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+            let mut nonce: u32 = 0;
 
-                read(&mut stream, 1);
+            for _ in 0..100000 {
+                write(&mut stream, buffer, nonce, 1);
+
+                read(&mut stream, buffer, read_buffer, nonce, 1);
+
+                nonce += 1;
             }
         });
         handels.push(handle);
@@ -188,9 +262,13 @@ fn test_server_performace_massive_batch() {
         let handle = thread::spawn(|| {
             let mut stream = create_stream();
 
-            write(&mut stream, 100000);
+            let buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+            let read_buffer: &mut [u8; BUFFER_SIZE] = &mut init_buffer();
+            let nonce: u32 = 0;
 
-            read(&mut stream, 100000);
+            write(&mut stream, buffer, nonce, 100000);
+
+            read(&mut stream, buffer, read_buffer, nonce, 100000);
         });
         handels.push(handle);
     }
