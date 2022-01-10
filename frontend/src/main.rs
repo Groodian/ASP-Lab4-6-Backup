@@ -1,6 +1,7 @@
 use rust_chat_client::net::client::Client;
 use rust_chat_client::net::message::Message;
 use rust_chat_client::net::messages::GlobalChatMessage;
+use iced::{button, text_input};
 use std::io;
 
 fn main() {
