@@ -18,3 +18,19 @@ fn main() {
 
     server.join();
 }
+
+
+
+
+
+
+
+
+
+
+/*
+
+Atomic for server stop?
+Atomic for monitoring?
+
+*/

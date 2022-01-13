@@ -1,5 +1,6 @@
 use crate::net::{
     connection_thread::ConnectionThread,
+    monitoring::Monitoring,
     msg::message::Message,
     server_stop::{ServerStop, ServerThreadStop},
 };
@@ -107,10 +108,17 @@ impl Server {
 
         let connection_thread_amount = self.connection_thread_amount.clone();
 
+        // Monitoring
+        let mut monitoring = Monitoring::new(Duration::from_secs(30));
+        let monitoring_stats = monitoring.get_new_stats();
+
         let mut connection_threads_guard = connection_threads.lock().unwrap();
         for i in 0..self.connection_thread_amount {
-            let mut connection_thread =
-                ConnectionThread::new(format!("Thread-{}", i), server_broadcast_message.clone());
+            let mut connection_thread = ConnectionThread::new(
+                format!("Thread-{}", i),
+                server_broadcast_message.clone(),
+                monitoring.get_new_stats(),
+            );
             connection_thread.start();
             server_thread_stops.push(connection_thread.get_server_thread_stop());
             connection_threads_guard.push(connection_thread);
@@ -134,6 +142,8 @@ impl Server {
                         if server_thread_stop.should_stop() {
                             return;
                         }
+
+                        monitoring.update();
 
                         for event in events.iter() {
                             match event.token() {
@@ -159,6 +169,8 @@ impl Server {
                                             return;
                                         }
                                     };
+
+                                    monitoring_stats.new_connection();
 
                                     println!(
                                         "[{}] Accepted connection from: {} and moved to Thread: {}",

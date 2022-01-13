@@ -175,8 +175,6 @@ fn test_server_performace_single_batch() {
 
     write(&mut stream, buffer, nonce, 100000);
 
-    println!("{}", nonce);
-
     read(&mut stream, buffer, read_buffer, nonce, 100000);
 }
 

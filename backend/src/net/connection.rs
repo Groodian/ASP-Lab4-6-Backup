@@ -1,8 +1,10 @@
+use crate::net::monitoring::MonitoringStats;
 use crate::net::msg::message::{Message, MessageTrait};
 use crate::net::msg::messages::{GlobalChatMessage, PingMessage};
 use crate::net::server::ServerBroadcastMessage;
 use mio::{net::TcpStream, Interest, Registry, Token};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::{
     collections::VecDeque,
     io::{self, Read, Write},
@@ -24,9 +26,12 @@ const MAX_PAYLOAD: usize = 1024;
 const MAX_PACKET_SIZE: usize = HEADER_SIZE + MAX_PAYLOAD;
 
 macro_rules! ProcessMessage {
-    ($message_struct:ident, $utf8_payload:expr, $connection:expr) => {
+    ($message_struct:ident, $utf8_payload:expr,  $connection:expr) => {
         match serde_json::from_str::<$message_struct>($utf8_payload) {
-            Ok(message) => message.process($connection),
+            Ok(message) => {
+                $connection.monitoring_stats.message_received();
+                message.process($connection)
+            }
             Err(_) => return false,
         }
     };
@@ -43,6 +48,7 @@ enum MessageDecodeState {
 pub struct Connection {
     tcp_stream: TcpStream,
     server_broadcast_message: ServerBroadcastMessage,
+    monitoring_stats: Arc<MonitoringStats>,
     registry: Rc<Registry>,
     token: Token,
     message_queue: VecDeque<Message>, // has no limit!!!
@@ -63,12 +69,14 @@ impl Connection {
     pub fn new(
         tcp_stream: TcpStream,
         server_broadcast_message: ServerBroadcastMessage,
+        monitoring_stats: Arc<MonitoringStats>,
         registry: Rc<Registry>,
         token: Token,
     ) -> Self {
         Self {
             tcp_stream,
             server_broadcast_message,
+            monitoring_stats,
             registry,
             token,
             message_queue: VecDeque::new(),
@@ -100,6 +108,7 @@ impl Connection {
                 }
                 Ok(n) => {
                     self.in_buffer_pos += n;
+                    self.monitoring_stats.bytes_read(n);
 
                     if !self.decode() {
                         println!("Invalid data, closing connection...",);
@@ -271,10 +280,14 @@ impl Connection {
                 .write(&self.out_buffer[self.out_buffer_pos..self.out_buffer_size])
             {
                 Ok(n) => {
+                    self.monitoring_stats.bytes_send(n);
+
                     if n != self.out_buffer_size - self.out_buffer_pos {
                         self.out_buffer_pos = n;
                         set_send_interest = true;
                     } else {
+                        self.monitoring_stats.messege_send();
+
                         self.out_buffer_size = 0;
                         self.out_buffer_pos = 0;
                         // we dont return because we can try to write more messages

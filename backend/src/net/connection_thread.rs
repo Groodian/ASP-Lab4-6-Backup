@@ -1,4 +1,4 @@
-use crate::net::{connection::Connection, msg::message::Message, server_stop::ServerThreadStop, server::ServerBroadcastMessage};
+use crate::net::{connection::Connection, msg::message::Message, server_stop::ServerThreadStop, server::ServerBroadcastMessage, monitoring::MonitoringStats};
 use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
 use std::{
     collections::{HashMap, VecDeque},
@@ -13,6 +13,7 @@ const WAKER_TOKEN: Token = Token(0);
 pub struct ConnectionThread {
     connection_thread_name: String,
     server_broadcast_message: ServerBroadcastMessage,
+    monitoring_stats: Arc<MonitoringStats>,
     server_thread_stop: ServerThreadStop,
     waker: Option<Arc<Waker>>,
     new_connections: Arc<Mutex<VecDeque<TcpStream>>>,
@@ -21,10 +22,11 @@ pub struct ConnectionThread {
 }
 
 impl ConnectionThread {
-    pub fn new(connection_thread_name: String, server_broadcast_message: ServerBroadcastMessage) -> Self {
+    pub fn new(connection_thread_name: String, server_broadcast_message: ServerBroadcastMessage, monitoring_stats: Arc<MonitoringStats>) -> Self {
         Self {
             connection_thread_name,
             server_broadcast_message,
+            monitoring_stats,
             server_thread_stop: ServerThreadStop::new(),
             waker: None,
             new_connections: Arc::new(Mutex::new(VecDeque::new())),
@@ -55,6 +57,7 @@ impl ConnectionThread {
         let new_connections = Arc::clone(&self.new_connections);
         let broadcast_messages = Arc::clone(&self.broadcast_messages);
         let server_broadcast_message = self.server_broadcast_message.clone();
+        let monitoring_stats = Arc::clone(&self.monitoring_stats);
 
         let connection_thread_name = self.connection_thread_name.clone();
 
@@ -114,6 +117,7 @@ impl ConnectionThread {
                                                 Connection::new(
                                                     connection,
                                                     server_broadcast_message.clone(),
+                                                    Arc::clone(&monitoring_stats),
                                                     Rc::clone(&registry),
                                                     next_token,
                                                 ),

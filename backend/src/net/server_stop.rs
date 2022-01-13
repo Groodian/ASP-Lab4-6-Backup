@@ -1,11 +1,14 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 pub struct ServerStop {
     server_thread_stops: Vec<ServerThreadStop>,
 }
 
 pub struct ServerThreadStop {
-    should_stop: Arc<Mutex<bool>>,
+    should_stop: Arc<AtomicBool>,
 }
 
 impl ServerStop {
@@ -25,29 +28,23 @@ impl ServerStop {
 impl ServerThreadStop {
     pub fn new() -> Self {
         Self {
-            should_stop: Arc::new(Mutex::new(false)),
+            should_stop: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn stop(&self) {
-        let mut should_stop = self.should_stop.lock().unwrap();
-        *should_stop = true;
-        drop(should_stop);
+        self.should_stop.store(true, Ordering::Relaxed);
     }
 
     pub fn should_stop(&self) -> bool {
-        let should_stop = self.should_stop.lock().unwrap();
-        let return_value = *should_stop;
-        drop(should_stop);
-
-        return_value
+        return self.should_stop.load(Ordering::Relaxed);
     }
 }
 
 impl Clone for ServerThreadStop {
     fn clone(&self) -> Self {
         Self {
-            should_stop: Arc::clone(&self.should_stop.clone()),
+            should_stop: Arc::clone(&self.should_stop),
         }
     }
 }
