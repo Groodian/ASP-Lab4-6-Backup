@@ -103,7 +103,6 @@ impl Connection {
                 Ok(0) => {
                     // Reading 0 bytes means the other side has closed the
                     // connection or is done writing, then so are we.
-                    println!("Connection closed.");
                     return true;
                 }
                 Ok(n) => {

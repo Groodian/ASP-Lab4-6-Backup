@@ -17,6 +17,9 @@ pub struct MonitoringStats {
     new_connections: AtomicUsize,
     total_new_connections: AtomicUsize,
 
+    lost_connections: AtomicUsize,
+    total_lost_connections: AtomicUsize,
+
     bytes_read: AtomicUsize,
     total_bytes_read: AtomicUsize,
 
@@ -50,6 +53,9 @@ impl Monitoring {
             let mut new_connections = 0;
             let mut total_new_connections = 0;
 
+            let mut lost_connections = 0;
+            let mut total_lost_connections = 0;
+
             let mut bytes_read = 0;
             let mut total_bytes_read = 0;
 
@@ -65,6 +71,9 @@ impl Monitoring {
             for stats in &self.stats {
                 new_connections += stats.new_connections.load(Ordering::Relaxed);
                 total_new_connections += stats.total_new_connections.load(Ordering::Relaxed);
+
+                lost_connections += stats.lost_connections.load(Ordering::Relaxed);
+                total_lost_connections += stats.total_lost_connections.load(Ordering::Relaxed);
 
                 bytes_read += stats.bytes_read.load(Ordering::Relaxed);
                 total_bytes_read += stats.total_bytes_read.load(Ordering::Relaxed);
@@ -84,9 +93,11 @@ impl Monitoring {
                 "                                                                                         \n\
                 ----------------------------------------------------------------------------------------- \n\
                 Elapsed time: {:.3?}                                                                      \n\
+                Current connections: {}                                                                   \n\
                                                                                                           \n\
                 Type                   |       last/s  |       total/s  |      last  |     total |        \n\
                 Connections:           | {:w1$.3}  |  {:w1$.3}  |  {:w2$}  |  {:w2$} |                    \n\
+                Disconnects:           | {:w1$.3}  |  {:w1$.3}  |  {:w2$}  |  {:w2$} |                    \n\
                 Bytes read:            | {:w1$.3}  |  {:w1$.3}  |  {:w2$}  |  {:w2$} |                    \n\
                 Bytes send:            | {:w1$.3}  |  {:w1$.3}  |  {:w2$}  |  {:w2$} |                    \n\
                 Messages received:     | {:w1$.3}  |  {:w1$.3}  |  {:w2$}  |  {:w2$} |                    \n\
@@ -94,10 +105,15 @@ impl Monitoring {
                 ----------------------------------------------------------------------------------------- \n\
                 ",
                 elapsed_time,
+                (total_new_connections - total_lost_connections),
                 (new_connections as f32 / elapsed_time_sec),
                 (total_new_connections as f32 / elapsed_start_time_sec),
                 new_connections,
                 total_new_connections,
+                (lost_connections as f32 / elapsed_time_sec),
+                (total_lost_connections as f32 / elapsed_start_time_sec),
+                lost_connections,
+                total_lost_connections,
                 (bytes_read as f32 / elapsed_time_sec),
                 (total_bytes_read as f32 / elapsed_start_time_sec),
                 bytes_read,
@@ -121,6 +137,7 @@ impl Monitoring {
             // reset stats
             for stats in &self.stats {
                 stats.new_connections.store(0, Ordering::Relaxed);
+                stats.lost_connections.store(0, Ordering::Relaxed);
                 stats.bytes_read.store(0, Ordering::Relaxed);
                 stats.bytes_send.store(0, Ordering::Relaxed);
                 stats.messages_received.store(0, Ordering::Relaxed);
@@ -144,6 +161,9 @@ impl MonitoringStats {
             new_connections: AtomicUsize::new(0),
             total_new_connections: AtomicUsize::new(0),
 
+            lost_connections: AtomicUsize::new(0),
+            total_lost_connections: AtomicUsize::new(0),
+
             bytes_read: AtomicUsize::new(0),
             total_bytes_read: AtomicUsize::new(0),
 
@@ -161,6 +181,11 @@ impl MonitoringStats {
     pub fn new_connection(&self) {
         self.new_connections.fetch_add(1, Ordering::Relaxed);
         self.total_new_connections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn lost_connection(&self) {
+        self.lost_connections.fetch_add(1, Ordering::Relaxed);
+        self.total_lost_connections.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn bytes_read(&self, bytes: usize) {

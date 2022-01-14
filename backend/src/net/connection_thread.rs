@@ -171,6 +171,9 @@ impl ConnectionThread {
 
                                     if remove_connection {
                                         if let Some(connection) = connections.remove(&token) {
+                                            println!("Connection closed.");
+                                            monitoring_stats.lost_connection();
+                                            
                                             poll.registry()
                                                 .deregister(&mut connection.tcp_stream())
                                                 .expect(
