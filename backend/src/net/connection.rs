@@ -1,7 +1,10 @@
+use crate::net::event::EventHandler;
 use crate::net::monitoring::MonitoringStats;
 use crate::net::msg::message::{Message, MessageTrait};
-use crate::net::msg::messages::{GlobalChatMessage, PingMessage};
-use crate::net::server::ServerBroadcastMessage;
+use crate::net::msg::messages::{
+    GlobalChatMessage, LoginMessage, PingMessage, PrivateChatMessage, PublishGlobalChatMessage,
+    PublishPrivateChatMessage,
+};
 use mio::{net::TcpStream, Interest, Registry, Token};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -47,7 +50,7 @@ enum MessageDecodeState {
 
 pub struct Connection {
     tcp_stream: TcpStream,
-    server_broadcast_message: ServerBroadcastMessage,
+    pub server_event_handler: EventHandler,
     monitoring_stats: Arc<MonitoringStats>,
     registry: Rc<Registry>,
     token: Token,
@@ -63,19 +66,20 @@ pub struct Connection {
     message_number: usize,
     payload_size: usize,
     // current message decode data/state end
+    pub user_name: Option<String>,
 }
 
 impl Connection {
     pub fn new(
         tcp_stream: TcpStream,
-        server_broadcast_message: ServerBroadcastMessage,
+        server_event_handler: EventHandler,
         monitoring_stats: Arc<MonitoringStats>,
         registry: Rc<Registry>,
         token: Token,
     ) -> Self {
         Self {
             tcp_stream,
-            server_broadcast_message,
+            server_event_handler,
             monitoring_stats,
             registry,
             token,
@@ -89,6 +93,7 @@ impl Connection {
             state: MessageDecodeState::WaitingForHeader,
             message_number: 0,
             payload_size: 0,
+            user_name: None,
         }
     }
 
@@ -210,7 +215,11 @@ impl Connection {
         match from_utf8(&self.in_buffer[HEADER_SIZE..self.payload_size + HEADER_SIZE]) {
             Ok(utf8_payload) => match self.message_number {
                 0 => ProcessMessage!(PingMessage, utf8_payload, self),
-                1 => ProcessMessage!(GlobalChatMessage, utf8_payload, self),
+                1 => ProcessMessage!(LoginMessage, utf8_payload, self),
+                2 => ProcessMessage!(PublishGlobalChatMessage, utf8_payload, self),
+                3 => ProcessMessage!(GlobalChatMessage, utf8_payload, self),
+                4 => ProcessMessage!(PublishPrivateChatMessage, utf8_payload, self),
+                5 => ProcessMessage!(PrivateChatMessage, utf8_payload, self),
                 _ => return false,
             },
             Err(_) => return false,
@@ -360,10 +369,6 @@ impl Connection {
         self.out_buffer_size = HEADER_SIZE + message.len();
         self.out_buffer_pos = 0;
         return true;
-    }
-
-    pub fn server_broadcast_message(&self, message: Message) {
-        self.server_broadcast_message.broadcast_message(message);
     }
 
     pub fn tcp_stream(self) -> TcpStream {

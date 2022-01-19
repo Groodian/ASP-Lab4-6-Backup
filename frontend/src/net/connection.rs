@@ -1,5 +1,8 @@
 use crate::net::message::{Message, MessageTrait};
-use crate::net::messages::{GlobalChatMessage, PingMessage};
+use crate::net::messages::{
+    GlobalChatMessage, LoginMessage, PingMessage, PrivateChatMessage, PublishGlobalChatMessage,
+    PublishPrivateChatMessage,
+};
 use mio::{net::TcpStream, Interest, Registry, Token};
 use std::rc::Rc;
 use std::{
@@ -194,7 +197,11 @@ impl Connection {
         match from_utf8(&self.in_buffer[HEADER_SIZE..self.payload_size + HEADER_SIZE]) {
             Ok(utf8_payload) => match self.message_number {
                 0 => ProcessMessage!(PingMessage, utf8_payload, self),
-                1 => ProcessMessage!(GlobalChatMessage, utf8_payload, self),
+                1 => ProcessMessage!(LoginMessage, utf8_payload, self),
+                2 => ProcessMessage!(PublishGlobalChatMessage, utf8_payload, self),
+                3 => ProcessMessage!(GlobalChatMessage, utf8_payload, self),
+                4 => ProcessMessage!(PublishPrivateChatMessage, utf8_payload, self),
+                5 => ProcessMessage!(PrivateChatMessage, utf8_payload, self),
                 _ => return false,
             },
             Err(_) => return false,

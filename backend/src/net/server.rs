@@ -1,12 +1,11 @@
 use crate::net::{
     connection_thread::ConnectionThread,
+    event::EventHandler,
     monitoring::Monitoring,
-    msg::message::Message,
     server_stop::{ServerStop, ServerThreadStop},
 };
 use mio::{net::TcpListener, Events, Interest, Poll, Token, Waker};
 use std::{
-    collections::VecDeque,
     io,
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -24,39 +23,6 @@ pub struct Server {
     server_thread_stop: ServerThreadStop,
     server_socket_thread_handle: Option<JoinHandle<()>>,
     connection_threads: Arc<Mutex<Vec<ConnectionThread>>>,
-}
-
-pub struct ServerBroadcastMessage {
-    waker: Arc<Waker>,
-    messages_queue: Arc<Mutex<VecDeque<Message>>>,
-}
-
-impl ServerBroadcastMessage {
-    pub fn new(waker: Arc<Waker>) -> Self {
-        Self {
-            waker,
-            messages_queue: Arc::new(Mutex::new(VecDeque::new())),
-        }
-    }
-
-    pub fn broadcast_message(&self, message: Message) {
-        let mut broadcast_messages = self.messages_queue.lock().unwrap();
-
-        broadcast_messages.push_back(message);
-
-        drop(broadcast_messages);
-
-        self.waker.wake().expect("Error while wake!");
-    }
-}
-
-impl Clone for ServerBroadcastMessage {
-    fn clone(&self) -> Self {
-        Self {
-            waker: Arc::clone(&self.waker),
-            messages_queue: Arc::clone(&self.messages_queue),
-        }
-    }
 }
 
 impl Server {
@@ -92,7 +58,7 @@ impl Server {
                 .expect("Error while creating waker!"),
         );
 
-        let server_broadcast_message = ServerBroadcastMessage::new(waker);
+        let event_handler = EventHandler::new(Some(waker));
 
         let duration = Some(Duration::from_millis(500));
 
@@ -116,7 +82,7 @@ impl Server {
         for i in 0..self.connection_thread_amount {
             let mut connection_thread = ConnectionThread::new(
                 format!("Thread-{}", i),
-                server_broadcast_message.clone(),
+                event_handler.clone(),
                 monitoring.get_new_stats(),
             );
             connection_thread.start();
@@ -194,24 +160,53 @@ impl Server {
                                     drop(connection_threads);
                                 },
                                 WAKER_TOKEN_BROADCAST => {
+                                    println!("test2");
                                     let mut connection_threads_guard =
                                         connection_threads.lock().unwrap();
-                                    let mut messages_queue_guard =
-                                        server_broadcast_message.messages_queue.lock().unwrap();
 
+                                    // check for global chat messages
+                                    let mut global_chat_message_queue_guard =
+                                        event_handler.global_chat_message_queue.lock().unwrap();
                                     loop {
-                                        match messages_queue_guard.pop_front() {
+                                        match global_chat_message_queue_guard.pop_front() {
                                             Some(message) => {
                                                 for connection_thread in
                                                     connection_threads_guard.iter_mut()
                                                 {
                                                     connection_thread
-                                                        .broadcast_message(message.clone());
+                                                        .event_handler
+                                                        .broadcast_global_chat_message(
+                                                            message.clone(),
+                                                        );
                                                 }
                                             }
                                             None => break,
                                         }
                                     }
+                                    drop(global_chat_message_queue_guard);
+
+                                    // check for private messages
+                                    let mut private_chat_message_event_queue_guard = event_handler
+                                        .private_chat_message_event_queue
+                                        .lock()
+                                        .unwrap();
+                                    loop {
+                                        match private_chat_message_event_queue_guard.pop_front() {
+                                            Some(message) => {
+                                                for connection_thread in
+                                                    connection_threads_guard.iter_mut()
+                                                {
+                                                    connection_thread
+                                                        .event_handler
+                                                        .private_chat_message_event(
+                                                            message.clone(),
+                                                        );
+                                                }
+                                            }
+                                            None => break,
+                                        }
+                                    }
+                                    drop(private_chat_message_event_queue_guard);
 
                                     drop(connection_threads_guard);
                                 }

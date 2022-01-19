@@ -2,7 +2,7 @@ use crate::net::connection::Connection;
 use crate::net::message::{Message, MessageTrait};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct PingMessage {
     pub nonce: u32,
     pub reply: bool,
@@ -24,18 +24,74 @@ impl MessageTrait for PingMessage {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
+pub struct LoginMessage {
+    pub user_name: String,
+}
+
+impl MessageTrait for LoginMessage {
+    fn process(self, _connection: &mut Connection) {}
+
+    fn number(&self) -> u32 {
+        1
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PublishGlobalChatMessage {
+    pub message: String,
+}
+
+impl MessageTrait for PublishGlobalChatMessage {
+    fn process(self, _connection: &mut Connection) {}
+
+    fn number(&self) -> u32 {
+        2
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct GlobalChatMessage {
-    pub name: String,
+    pub user_name: String,
     pub message: String,
 }
 
 impl MessageTrait for GlobalChatMessage {
-    fn process(self, _: &mut Connection) {
-        println!("{}: {}", self.name, self.message);
+    fn process(self, _connection: &mut Connection) {
+        println!("{}: {}", self.user_name, self.message);
     }
 
     fn number(&self) -> u32 {
-        1
+        3
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PublishPrivateChatMessage {
+    pub to_user_name: String,
+    pub message: String,
+}
+
+impl MessageTrait for PublishPrivateChatMessage {
+    fn process(self, _connection: &mut Connection) {}
+
+    fn number(&self) -> u32 {
+        4
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PrivateChatMessage {
+    pub from_user_name: String,
+    pub message: String,
+}
+
+impl MessageTrait for PrivateChatMessage {
+    fn process(self, _connection: &mut Connection) {
+        println!("[PRIVATE] {}: {}", self.from_user_name, self.message);
+    }
+
+    fn number(&self) -> u32 {
+        5
     }
 }

@@ -1,4 +1,4 @@
-use crate::net::{connection::Connection, msg::message::Message, server_stop::ServerThreadStop, server::ServerBroadcastMessage, monitoring::MonitoringStats};
+use crate::net::{connection::Connection, msg::message::Message, server_stop::ServerThreadStop, event::EventHandler, monitoring::MonitoringStats, msg::messages::PrivateChatMessage};
 use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
 use std::{
     collections::{HashMap, VecDeque},
@@ -12,25 +12,25 @@ const WAKER_TOKEN: Token = Token(0);
 
 pub struct ConnectionThread {
     connection_thread_name: String,
-    server_broadcast_message: ServerBroadcastMessage,
+    server_event_handler: EventHandler,
     monitoring_stats: Arc<MonitoringStats>,
+    pub event_handler: EventHandler,
     server_thread_stop: ServerThreadStop,
     waker: Option<Arc<Waker>>,
     new_connections: Arc<Mutex<VecDeque<TcpStream>>>,
-    broadcast_messages: Arc<Mutex<VecDeque<Message>>>,
     connection_thread_handle: Option<JoinHandle<()>>,
 }
 
 impl ConnectionThread {
-    pub fn new(connection_thread_name: String, server_broadcast_message: ServerBroadcastMessage, monitoring_stats: Arc<MonitoringStats>) -> Self {
+    pub fn new(connection_thread_name: String, server_event_handler: EventHandler, monitoring_stats: Arc<MonitoringStats>) -> Self {
         Self {
             connection_thread_name,
-            server_broadcast_message,
+            server_event_handler,
             monitoring_stats,
+            event_handler: EventHandler::new(None),
             server_thread_stop: ServerThreadStop::new(),
             waker: None,
             new_connections: Arc::new(Mutex::new(VecDeque::new())),
-            broadcast_messages: Arc::new(Mutex::new(VecDeque::new())),
             connection_thread_handle: None,
         }
     }
@@ -43,10 +43,12 @@ impl ConnectionThread {
         let mut events = Events::with_capacity(64);
 
         // Create waker connection instance.
-        self.waker = Some(Arc::new(
+        let waker = Arc::new(
             Waker::new(poll.registry(), WAKER_TOKEN)
                 .expect("Error while creating waker!"),
-        ));
+        );
+        self.event_handler.waker = Some(Arc::clone(&waker));
+        self.waker = Some(waker);
 
         // Unique token for each incoming connection.
         let mut next_token = Token(2);
@@ -55,8 +57,8 @@ impl ConnectionThread {
 
         let server_thread_stop = self.server_thread_stop.clone();
         let new_connections = Arc::clone(&self.new_connections);
-        let broadcast_messages = Arc::clone(&self.broadcast_messages);
-        let server_broadcast_message = self.server_broadcast_message.clone();
+        let event_handler = self.event_handler.clone();
+        let server_event_handler = self.server_event_handler.clone();
         let monitoring_stats = Arc::clone(&self.monitoring_stats);
 
         let connection_thread_name = self.connection_thread_name.clone();
@@ -116,7 +118,7 @@ impl ConnectionThread {
                                                 next_token,
                                                 Connection::new(
                                                     connection,
-                                                    server_broadcast_message.clone(),
+                                                    server_event_handler.clone(),
                                                     Arc::clone(&monitoring_stats),
                                                     Rc::clone(&registry),
                                                     next_token,
@@ -133,12 +135,13 @@ impl ConnectionThread {
 
                                     drop(new_connections);
 
-                                    // check for broadcast messages
-                                    let mut broadcast_messages = broadcast_messages.lock().unwrap();
+                                    // check for global chat messages
+                                    let mut global_chat_message_queue_guard = event_handler.global_chat_message_queue.lock().unwrap();
 
                                     loop {
-                                        match broadcast_messages.pop_front() {
-                                            Some(message) => {
+                                        match global_chat_message_queue_guard.pop_front() {
+                                            Some(global_chat_message) => {
+                                                let message = Message::new(global_chat_message);
                                                 for connection in connections.iter_mut() {
                                                     connection.1.send_message(message.clone());
                                                 }
@@ -147,7 +150,37 @@ impl ConnectionThread {
                                         }
                                     }
 
-                                    drop(broadcast_messages);
+                                    drop(global_chat_message_queue_guard);
+
+                                    // check for private messages
+                                    let mut private_chat_message_event_queue_guard = event_handler
+                                        .private_chat_message_event_queue
+                                        .lock()
+                                        .unwrap();
+
+                                    loop {
+                                        match private_chat_message_event_queue_guard.pop_front() {
+                                            Some(private_chat_message_event) => {
+                                                let message = Message::new(PrivateChatMessage {
+                                                    from_user_name: private_chat_message_event.from_user_name,
+                                                    message: private_chat_message_event.message
+                                                });
+                                                for connection in connections.iter_mut() {
+                                                    match &connection.1.user_name {
+                                                        Some(user_name) => {
+                                                            if user_name == &private_chat_message_event.to_user_name {
+                                                                connection.1.send_message(message.clone());
+                                                            }
+                                                        },
+                                                        None => {},
+                                                    }
+                                                }
+                                            },
+                                            None => break,
+                                        }
+                                    }
+
+                                    drop(private_chat_message_event_queue_guard);
                                 }
                                 token => {
                                     // Maybe received an event for a TCP connection.
@@ -200,19 +233,6 @@ impl ConnectionThread {
         new_connections.push_back(connection);
 
         drop(new_connections);
-
-        match &self.waker {
-            Some(waker) => waker.wake().expect("Error while wake!"),
-            None => (),
-        }
-    }
-
-    pub fn broadcast_message(&self, message: Message) {
-        let mut broadcast_messages = self.broadcast_messages.lock().unwrap();
-
-        broadcast_messages.push_back(message);
-
-        drop(broadcast_messages);
 
         match &self.waker {
             Some(waker) => waker.wake().expect("Error while wake!"),

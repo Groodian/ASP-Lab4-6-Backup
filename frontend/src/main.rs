@@ -1,6 +1,8 @@
 use rust_chat_client::net::client::Client;
 use rust_chat_client::net::message::Message;
-use rust_chat_client::net::messages::GlobalChatMessage;
+use rust_chat_client::net::messages::{
+    LoginMessage, PublishGlobalChatMessage, PublishPrivateChatMessage,
+};
 use std::io;
 
 fn main() {
@@ -19,6 +21,8 @@ fn main() {
 
     println!("Connecting...");
     let client_stop = client.connect();
+    let login_message = LoginMessage { user_name: name };
+    client.send_message(Message::new(login_message));
     println!("Connected.");
 
     loop {
@@ -31,11 +35,18 @@ fn main() {
                     return;
                 }
 
-                let global_chat_message = GlobalChatMessage {
-                    name: name.clone(),
-                    message,
-                };
-                client.send_message(Message::new(global_chat_message));
+                if message.starts_with("private ") {
+                    let split = message.split(" ").collect::<Vec<&str>>();
+
+                    let private_chat_message = PublishPrivateChatMessage {
+                        to_user_name: split[1].to_string(),
+                        message: split[2..].join(" "),
+                    };
+                    client.send_message(Message::new(private_chat_message));
+                } else {
+                    let global_chat_message = PublishGlobalChatMessage { message };
+                    client.send_message(Message::new(global_chat_message));
+                }
             }
             Err(_) => break,
         }
