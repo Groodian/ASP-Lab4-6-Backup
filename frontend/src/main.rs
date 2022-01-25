@@ -242,7 +242,6 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     }
 
     let messages_guard = app.messages.lock().unwrap();
-
     let messages: Vec<ListItem> = messages_guard
         .iter()
         .enumerate()
@@ -251,6 +250,8 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
             ListItem::new(content)
         })
         .collect();
+    drop(messages_guard);
+
     let messages =
         List::new(messages).block(Block::default().borders(Borders::ALL).title("Messages"));
     f.render_widget(messages, chunks[2]);
