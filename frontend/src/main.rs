@@ -84,7 +84,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
 
     let mut client = Client::new(address, Arc::clone(&app.messages));
     let mut client_stop: Option<ClientStop> = None;
-    let mut privateUsername: String;
+    let mut privateUsername: String = String::new();
 
     print!("\x1B[2J\x1B[1;1H");
 
@@ -183,28 +183,25 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                     },
                     InputMode::PrivateMessaging => match key.code {
                         KeyCode::Enter => {
-                            let message: String = app.input.drain(..).collect();
+                            let private_message: String = app.input.drain(..).collect();
 
-                            if message.starts_with("private ") {
-                                let split = message.split(" ").collect::<Vec<&str>>();
+                            let message = format!("{} {} {}", "private", privateUsername, private_message);
 
-                                let private_chat_message = PublishPrivateChatMessage {
-                                    to_user_name: split[1].to_string(),
-                                    message: split[2..].join(" "),
-                                };
-                                client.send_message(Message::new(private_chat_message));
+                            let split = message.split(" ").collect::<Vec<&str>>();
 
-                                let mut messages_guard = app.messages.lock().unwrap();
-                                messages_guard.push(format!(
-                                    "[PRIVATE] [ME -> {}] {}",
-                                    split[1].to_string(),
-                                    split[2..].join(" ")
-                                ));
-                                drop(messages_guard);
-                            } else {
-                                let global_chat_message = PublishGlobalChatMessage { message };
-                                client.send_message(Message::new(global_chat_message));
-                            }
+                            let private_chat_message = PublishPrivateChatMessage {
+                                to_user_name: split[1].to_string(),
+                                message: split[2..].join(" "),
+                            };
+                            client.send_message(Message::new(private_chat_message));
+
+                            let mut messages_guard = app.messages.lock().unwrap();
+                            messages_guard.push(format!(
+                                "[PRIVATE] [ME -> {}] {}",
+                                split[1].to_string(),
+                                split[2..].join(" ")
+                            ));
+                            drop(messages_guard);
                         }
                         KeyCode::Char(c) => {
                             app.input.push(c);
