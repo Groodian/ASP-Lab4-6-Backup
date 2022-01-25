@@ -31,7 +31,6 @@ macro_rules! EventHandler {
 
                     match &self.waker {
                         Some(waker) => {
-                            println!("test1");
                             waker.wake().expect("Error while wake!");
                         }
                         None => {}

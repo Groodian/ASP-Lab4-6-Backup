@@ -4,6 +4,7 @@ use crate::net::client::{Client, ClientStop};
 use crate::net::message::Message;
 use crate::net::messages::{LoginMessage, PublishGlobalChatMessage, PublishPrivateChatMessage};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use std::{error::Error, io};
 
 use crossterm::{
@@ -87,74 +88,80 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
     loop {
         terminal.draw(|f| ui(f, &app))?;
 
-        if let Event::Key(key) = event::read()? {
-            match app.input_mode {
-                InputMode::Normal => match key.code {
-                    KeyCode::Char('e') => {
-                        app.input_mode = InputMode::Editing;
-                    }
-                    KeyCode::Char('q') => {
-                        match client_stop {
-                            Some(client_stop) => {
-                                client_stop.stop();
-                                client.join();
+        if event::poll(Duration::from_secs(0))? {
+            if let Event::Key(key) = event::read()? {
+                match app.input_mode {
+                    InputMode::Normal => match key.code {
+                        KeyCode::Char('e') => {
+                            app.input_mode = InputMode::Editing;
+                        }
+                        KeyCode::Char('q') => {
+                            match client_stop {
+                                Some(client_stop) => {
+                                    client_stop.stop();
+                                    client.join();
+                                }
+                                None => {}
                             }
-                            None => {}
+                            return Ok(());
                         }
-                        return Ok(());
-                    }
-                    _ => {}
-                },
-                InputMode::Editing => match key.code {
-                    KeyCode::Enter => {
-                        let message: String = app.input.drain(..).collect();
+                        _ => {}
+                    },
+                    InputMode::Editing => match key.code {
+                        KeyCode::Enter => {
+                            let message: String = app.input.drain(..).collect();
 
-                        if message.starts_with("private ") {
-                            let split = message.split(" ").collect::<Vec<&str>>();
+                            if message.starts_with("private ") {
+                                let split = message.split(" ").collect::<Vec<&str>>();
 
-                            let private_chat_message = PublishPrivateChatMessage {
-                                to_user_name: split[1].to_string(),
-                                message: split[2..].join(" "),
-                            };
-                            client.send_message(Message::new(private_chat_message));
-                            //app.messages.push(split[2..].join(" "));
-                        } else {
-                            let global_chat_message = PublishGlobalChatMessage { message };
-                            client.send_message(Message::new(global_chat_message));
-                            //app.messages.push(app.input.drain(..).collect());
+                                let private_chat_message = PublishPrivateChatMessage {
+                                    to_user_name: split[1].to_string(),
+                                    message: split[2..].join(" "),
+                                };
+                                client.send_message(Message::new(private_chat_message));
+
+                                let mut messages_guard = app.messages.lock().unwrap();
+                                messages_guard.push(format!(
+                                    "[PRIVATE] [ME -> {}] {}",
+                                    split[1].to_string(),
+                                    split[2..].join(" ")
+                                ));
+                                drop(messages_guard);
+                            } else {
+                                let global_chat_message = PublishGlobalChatMessage { message };
+                                client.send_message(Message::new(global_chat_message));
+                            }
                         }
+                        KeyCode::Char(c) => {
+                            app.input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            app.input.pop();
+                        }
+                        KeyCode::Esc => {
+                            app.input_mode = InputMode::Normal;
+                        }
+                        _ => {}
+                    },
+                    InputMode::Username => match key.code {
+                        KeyCode::Enter => {
+                            let name = app.input.drain(..).collect();
 
-                        terminal.draw(|f| ui(f, &app))?;
-                    }
-                    KeyCode::Char(c) => {
-                        app.input.push(c);
-                    }
-                    KeyCode::Backspace => {
-                        app.input.pop();
-                    }
-                    KeyCode::Esc => {
-                        app.input_mode = InputMode::Normal;
-                    }
-                    _ => {}
-                },
-                InputMode::Username => match key.code {
-                    KeyCode::Enter => {
-                        let name = app.input.drain(..).collect();
+                            client_stop = Some(client.connect());
+                            let login_message = LoginMessage { user_name: name };
+                            client.send_message(Message::new(login_message));
 
-                        client_stop = Some(client.connect());
-                        let login_message = LoginMessage { user_name: name };
-                        client.send_message(Message::new(login_message));
-
-                        app.input_mode = InputMode::Normal;
-                    }
-                    KeyCode::Char(c) => {
-                        app.input.push(c);
-                    }
-                    KeyCode::Backspace => {
-                        app.input.pop();
-                    }
-                    _ => {}
-                },
+                            app.input_mode = InputMode::Normal;
+                        }
+                        KeyCode::Char(c) => {
+                            app.input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            app.input.pop();
+                        }
+                        _ => {}
+                    },
+                }
             }
         }
     }

@@ -92,7 +92,7 @@ impl MessageTrait for PrivateChatMessage {
     fn process(self, connection: &mut Connection) {
         let mut console_messages_guard = connection.console_messages.lock().unwrap();
         console_messages_guard.push(format!(
-            "[PRIVATE] {}: {}",
+            "[PRIVATE] [{} -> ME] {}",
             self.from_user_name, self.message
         ));
         drop(console_messages_guard);

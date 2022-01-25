@@ -160,7 +160,6 @@ impl Server {
                                     drop(connection_threads);
                                 },
                                 WAKER_TOKEN_BROADCAST => {
-                                    println!("test2");
                                     let mut connection_threads_guard =
                                         connection_threads.lock().unwrap();
 
