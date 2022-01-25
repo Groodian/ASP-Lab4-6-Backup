@@ -1,8 +1,9 @@
-use rust_chat_client::net::client::Client;
-use rust_chat_client::net::message::Message;
-use rust_chat_client::net::messages::{
-    LoginMessage, PublishGlobalChatMessage, PublishPrivateChatMessage,
-};
+mod net;
+
+use crate::net::client::{Client, ClientStop};
+use crate::net::message::Message;
+use crate::net::messages::{LoginMessage, PublishGlobalChatMessage, PublishPrivateChatMessage};
+use std::sync::{Arc, Mutex};
 use std::{error::Error, io};
 
 use crossterm::{
@@ -19,7 +20,7 @@ use tui::{
     Frame, Terminal,
 };
 
-#[derive( Clone)]
+#[derive(Clone)]
 enum InputMode {
     Normal,
     Editing,
@@ -32,7 +33,7 @@ struct App {
     /// Current input mode
     input_mode: InputMode,
     /// History of recorded messages
-    messages: Vec<String>,
+    messages: Arc<Mutex<Vec<String>>>,
 }
 
 impl Default for App {
@@ -40,16 +41,12 @@ impl Default for App {
         App {
             input: String::new(),
             input_mode: InputMode::Username,
-            messages: Vec::new(),
+            messages: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
 
-
-
-
 fn main() -> Result<(), Box<dyn Error>> {
-  
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -77,15 +74,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-
-
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
-
     let address = "127.0.0.1:4444"
         .parse()
         .expect("Error while parsing address!");
 
-    let mut client = Client::new(address);
+    let mut client = Client::new(address, Arc::clone(&app.messages));
+    let mut client_stop: Option<ClientStop> = None;
 
     print!("\x1B[2J\x1B[1;1H");
 
@@ -99,6 +94,13 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                         app.input_mode = InputMode::Editing;
                     }
                     KeyCode::Char('q') => {
+                        match client_stop {
+                            Some(client_stop) => {
+                                client_stop.stop();
+                                client.join();
+                            }
+                            None => {}
+                        }
                         return Ok(());
                     }
                     _ => {}
@@ -109,19 +111,20 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
 
                         if message.starts_with("private ") {
                             let split = message.split(" ").collect::<Vec<&str>>();
-        
+
                             let private_chat_message = PublishPrivateChatMessage {
                                 to_user_name: split[1].to_string(),
                                 message: split[2..].join(" "),
                             };
                             client.send_message(Message::new(private_chat_message));
-                            app.messages.push(split[2..].join(" "));
+                            //app.messages.push(split[2..].join(" "));
                         } else {
                             let global_chat_message = PublishGlobalChatMessage { message };
                             client.send_message(Message::new(global_chat_message));
-                            app.messages.push(app.input.drain(..).collect());
+                            //app.messages.push(app.input.drain(..).collect());
                         }
 
+                        terminal.draw(|f| ui(f, &app))?;
                     }
                     KeyCode::Char(c) => {
                         app.input.push(c);
@@ -138,13 +141,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                     KeyCode::Enter => {
                         let name = app.input.drain(..).collect();
 
-                        client.connect();
+                        client_stop = Some(client.connect());
                         let login_message = LoginMessage { user_name: name };
                         client.send_message(Message::new(login_message));
 
-
                         app.input_mode = InputMode::Normal;
-
                     }
                     KeyCode::Char(c) => {
                         app.input.push(c);
@@ -157,7 +158,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
             }
         }
     }
-
 }
 
 fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
@@ -241,8 +241,9 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         }
     }
 
-    let messages: Vec<ListItem> = app
-        .messages
+    let messages_guard = app.messages.lock().unwrap();
+
+    let messages: Vec<ListItem> = messages_guard
         .iter()
         .enumerate()
         .map(|(i, m)| {

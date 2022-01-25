@@ -2,6 +2,7 @@ use crate::net::connection::Connection;
 use crate::net::message::Message;
 use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::{
     net::SocketAddr,
@@ -15,23 +16,29 @@ const TOKEN: Token = Token(0);
 const WAKER_TOKEN: Token = Token(1);
 
 pub struct ClientStop {
-    waker: Arc<Waker>,
+    should_stop: Arc<AtomicBool>,
 }
 
 impl ClientStop {
-    pub fn new(waker: Arc<Waker>) -> Self {
-        Self { waker }
+    pub fn new() -> Self {
+        Self {
+            should_stop: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     pub fn stop(&self) {
-        self.waker.wake().expect("Error while wake!");
+        self.should_stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn should_stop(&self) -> bool {
+        return self.should_stop.load(Ordering::Relaxed);
     }
 }
 
 impl Clone for ClientStop {
     fn clone(&self) -> Self {
         Self {
-            waker: Arc::clone(&self.waker),
+            should_stop: Arc::clone(&self.should_stop),
         }
     }
 }
@@ -41,15 +48,19 @@ pub struct Client {
     thread_handle: Option<JoinHandle<()>>,
     waker: Option<Arc<Waker>>,
     messages_queue: Arc<Mutex<VecDeque<Message>>>,
+    console_messages: Arc<Mutex<Vec<String>>>,
+    client_stop: ClientStop,
 }
 
 impl Client {
-    pub fn new(address: SocketAddr) -> Self {
+    pub fn new(address: SocketAddr, console_messages: Arc<Mutex<Vec<String>>>) -> Self {
         Self {
             address,
+            console_messages,
             thread_handle: None,
             waker: None,
             messages_queue: Arc::new(Mutex::new(VecDeque::new())),
+            client_stop: ClientStop::new(),
         }
     }
 
@@ -80,6 +91,8 @@ impl Client {
             .expect("Error while registering client!");
 
         let messages_queue = Arc::clone(&self.messages_queue);
+        let console_messages = Arc::clone(&self.console_messages);
+        let client_stop = self.client_stop.clone();
 
         self.thread_handle = Some(
             thread::Builder::new()
@@ -91,13 +104,19 @@ impl Client {
                             .expect("Error while clone registry!"),
                     );
 
-                    let mut connection = Connection::new(tcp_stream, Rc::clone(&registry), TOKEN);
+                    let mut connection =
+                        Connection::new(tcp_stream, Rc::clone(&registry), TOKEN, console_messages);
 
                     loop {
                         let poll_result = poll.poll(&mut events, duration);
                         if poll_result.is_err() {
                             eprintln!("Error while poll, retrying...");
                             continue;
+                        }
+
+                        // check if thread should stop
+                        if client_stop.should_stop() {
+                            return;
                         }
 
                         for event in events.iter() {
@@ -146,7 +165,7 @@ impl Client {
                 .expect("Error while creating client thread!"),
         );
 
-        ClientStop::new(waker)
+        self.client_stop.clone()
     }
 
     pub fn send_message(&mut self, message: Message) {

@@ -5,6 +5,7 @@ use crate::net::messages::{
 };
 use mio::{net::TcpStream, Interest, Registry, Token};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::{
     collections::VecDeque,
     io::{self, Read, Write},
@@ -58,14 +59,21 @@ pub struct Connection {
     message_number: usize,
     payload_size: usize,
     // current message decode data/state end
+    pub console_messages: Arc<Mutex<Vec<String>>>,
 }
 
 impl Connection {
-    pub fn new(tcp_stream: TcpStream, registry: Rc<Registry>, token: Token) -> Self {
+    pub fn new(
+        tcp_stream: TcpStream,
+        registry: Rc<Registry>,
+        token: Token,
+        console_messages: Arc<Mutex<Vec<String>>>,
+    ) -> Self {
         Self {
             tcp_stream,
             registry,
             token,
+            console_messages: console_messages,
             message_queue: VecDeque::new(),
             out_buffer: Box::new([0; MAX_PAYLOAD]),
             out_buffer_pos: 0,
