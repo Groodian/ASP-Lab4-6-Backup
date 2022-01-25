@@ -59,6 +59,7 @@ pub struct GlobalChatMessage {
 impl MessageTrait for GlobalChatMessage {
     fn process(self, _connection: &mut Connection) {
         println!("{}: {}", self.user_name, self.message);
+        println!("Hello Test");
     }
 
     fn number(&self) -> u32 {
