@@ -84,7 +84,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
 
     let mut client = Client::new(address, Arc::clone(&app.messages));
     let mut client_stop: Option<ClientStop> = None;
-    let mut privateUsername: String = String::new();
+    let mut private_username: String = String::new();
 
     print!("\x1B[2J\x1B[1;1H");
 
@@ -169,7 +169,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                     },
                     InputMode::PrivateUsername => match key.code {
                         KeyCode::Enter => {
-                            privateUsername = app.input.drain(..).collect();
+                            private_username = app.input.drain(..).collect();
 
                             app.input_mode = InputMode::PrivateMessaging;
                         }
@@ -185,7 +185,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                         KeyCode::Enter => {
                             let private_message: String = app.input.drain(..).collect();
 
-                            let message = format!("{} {} {}", "private", privateUsername, private_message);
+                            let message = format!("{} {} {}", "private", private_username, private_message);
 
                             let split = message.split(" ").collect::<Vec<&str>>();
 
