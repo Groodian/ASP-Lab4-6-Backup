@@ -362,7 +362,9 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         Err(err) => panic!("{}: {}", "Error: ", err)
     };
 
-    size.1 -= 10;
+    if size.1 > 9 {
+        size.1 -= 10;
+    }
 
     while messages.len() > size.1.into() {
         messages.remove(0);
