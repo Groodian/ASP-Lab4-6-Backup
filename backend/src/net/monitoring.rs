@@ -136,12 +136,12 @@ impl Monitoring {
 
             // reset stats
             for stats in &self.stats {
-                stats.new_connections.store(0, Ordering::Relaxed);
-                stats.lost_connections.store(0, Ordering::Relaxed);
-                stats.bytes_read.store(0, Ordering::Relaxed);
-                stats.bytes_send.store(0, Ordering::Relaxed);
-                stats.messages_received.store(0, Ordering::Relaxed);
-                stats.messeges_send.store(0, Ordering::Relaxed);
+                stats.new_connections.store(0, Ordering::SeqCst);
+                stats.lost_connections.store(0, Ordering::SeqCst);
+                stats.bytes_read.store(0, Ordering::SeqCst);
+                stats.bytes_send.store(0, Ordering::SeqCst);
+                stats.messages_received.store(0, Ordering::SeqCst);
+                stats.messeges_send.store(0, Ordering::SeqCst);
             }
             self.last_time = Instant::now();
         }
@@ -179,32 +179,32 @@ impl MonitoringStats {
     }
 
     pub fn new_connection(&self) {
-        self.new_connections.fetch_add(1, Ordering::Relaxed);
-        self.total_new_connections.fetch_add(1, Ordering::Relaxed);
+        self.new_connections.fetch_add(1, Ordering::SeqCst);
+        self.total_new_connections.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn lost_connection(&self) {
-        self.lost_connections.fetch_add(1, Ordering::Relaxed);
-        self.total_lost_connections.fetch_add(1, Ordering::Relaxed);
+        self.lost_connections.fetch_add(1, Ordering::SeqCst);
+        self.total_lost_connections.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn bytes_read(&self, bytes: usize) {
-        self.bytes_read.fetch_add(bytes, Ordering::Relaxed);
-        self.total_bytes_read.fetch_add(bytes, Ordering::Relaxed);
+        self.bytes_read.fetch_add(bytes, Ordering::SeqCst);
+        self.total_bytes_read.fetch_add(bytes, Ordering::SeqCst);
     }
 
     pub fn bytes_send(&self, bytes: usize) {
-        self.bytes_send.fetch_add(bytes, Ordering::Relaxed);
-        self.total_bytes_send.fetch_add(bytes, Ordering::Relaxed);
+        self.bytes_send.fetch_add(bytes, Ordering::SeqCst);
+        self.total_bytes_send.fetch_add(bytes, Ordering::SeqCst);
     }
 
     pub fn message_received(&self) {
-        self.messages_received.fetch_add(1, Ordering::Relaxed);
-        self.total_messages_received.fetch_add(1, Ordering::Relaxed);
+        self.messages_received.fetch_add(1, Ordering::SeqCst);
+        self.total_messages_received.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn messege_send(&self) {
-        self.messeges_send.fetch_add(1, Ordering::Relaxed);
-        self.total_messages_send.fetch_add(1, Ordering::Relaxed);
+        self.messeges_send.fetch_add(1, Ordering::SeqCst);
+        self.total_messages_send.fetch_add(1, Ordering::SeqCst);
     }
 }

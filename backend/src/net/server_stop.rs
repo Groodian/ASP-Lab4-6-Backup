@@ -33,11 +33,11 @@ impl ServerThreadStop {
     }
 
     pub fn stop(&self) {
-        self.should_stop.store(true, Ordering::Relaxed);
+        self.should_stop.store(true, Ordering::SeqCst);
     }
 
     pub fn should_stop(&self) -> bool {
-        return self.should_stop.load(Ordering::Relaxed);
+        return self.should_stop.load(Ordering::SeqCst);
     }
 }
 
