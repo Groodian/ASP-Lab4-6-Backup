@@ -10,7 +10,7 @@ use std::{error::Error, io};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, size},
 };
 use tui::{
     backend::{Backend, CrosstermBackend},
@@ -346,7 +346,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     }
 
     let messages_guard = app.messages.lock().unwrap();
-    let messages: Vec<ListItem> = messages_guard
+    let mut messages: Vec<ListItem> = messages_guard
         .iter()
         .enumerate()
         .map(|(_i, m)| {
@@ -356,7 +356,18 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         .collect();
     drop(messages_guard);
 
-    let messages =
-        List::new(messages).block(Block::default().borders(Borders::ALL).title("Messages")).style(Style::default().fg(Color::LightCyan));
+
+    let mut size = match size() {
+        Ok(x) => x,
+        Err(err) => panic!("{}: {}", "Error: ", err)
+    };
+
+    size.1 -= 10;
+
+    while messages.len() > size.1.into() {
+        messages.remove(0);
+    };
+
+    let messages = List::new(messages).block(Block::default().borders(Borders::ALL).title("Messages")).style(Style::default().fg(Color::LightCyan));
     f.render_widget(messages, chunks[2]);
 }
