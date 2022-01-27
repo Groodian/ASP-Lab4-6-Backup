@@ -3,15 +3,16 @@ mod net;
 use crate::net::client::{Client, ClientStop};
 use crate::net::message::Message;
 use crate::net::messages::{LoginMessage, PublishGlobalChatMessage, PublishPrivateChatMessage};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use std::{error::Error, io};
-
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, size},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, size, EnterAlternateScreen, LeaveAlternateScreen,
+    },
 };
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use std::{error::Error, io};
 use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout},
@@ -30,13 +31,18 @@ enum InputMode {
     PrivateMessaging,
 }
 
+pub enum MessageType {
+    Public,
+    Private,
+}
+
 struct App {
     /// Current value of the input box
     input: String,
     /// Current input mode
     input_mode: InputMode,
     /// History of recorded messages
-    messages: Arc<Mutex<Vec<String>>>,
+    messages: Arc<Mutex<Vec<(MessageType, String)>>>,
 }
 
 impl Default for App {
@@ -127,10 +133,13 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                                 client.send_message(Message::new(private_chat_message));
 
                                 let mut messages_guard = app.messages.lock().unwrap();
-                                messages_guard.push(format!(
-                                    "[PRIVATE] [ME -> {}] {}",
-                                    split[1].to_string(),
-                                    split[2..].join(" ")
+                                messages_guard.push((
+                                    MessageType::Private,
+                                    format!(
+                                        "[PRIVATE] [ME -> {}] {}",
+                                        split[1].to_string(),
+                                        split[2..].join(" ")
+                                    ),
                                 ));
                                 drop(messages_guard);
                             } else {
@@ -185,7 +194,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                         KeyCode::Enter => {
                             let private_message: String = app.input.drain(..).collect();
 
-                            let message = format!("{} {} {}", "private", private_username, private_message);
+                            let message =
+                                format!("{} {} {}", "private", private_username, private_message);
 
                             let split = message.split(" ").collect::<Vec<&str>>();
 
@@ -196,10 +206,13 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                             client.send_message(Message::new(private_chat_message));
 
                             let mut messages_guard = app.messages.lock().unwrap();
-                            messages_guard.push(format!(
-                                "[PRIVATE] [ME -> {}] {}",
-                                split[1].to_string(),
-                                split[2..].join(" ")
+                            messages_guard.push((
+                                MessageType::Private,
+                                format!(
+                                    "[PRIVATE] [ME -> {}] {}",
+                                    split[1].to_string(),
+                                    split[2..].join(" ")
+                                ),
                             ));
                             drop(messages_guard);
                         }
@@ -240,9 +253,19 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
                 Span::raw("Press "),
                 Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" to exit, "),
-                Span::styled("e", Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow)),
+                Span::styled(
+                    "e",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::Yellow),
+                ),
                 Span::raw(" to start messaging, "),
-                Span::styled("p", Style::default().add_modifier(Modifier::BOLD).fg(Color::LightMagenta)),
+                Span::styled(
+                    "p",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::LightMagenta),
+                ),
                 Span::raw(" to start private messaging."),
             ],
             Style::default().add_modifier(Modifier::RAPID_BLINK),
@@ -254,7 +277,12 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
                 Span::raw(" to stop writing, "),
                 Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" to send "),
-                Span::styled("public", Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow)),
+                Span::styled(
+                    "public",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::Yellow),
+                ),
                 Span::raw(" message"),
             ],
             Style::default(),
@@ -269,7 +297,12 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         InputMode::PrivateUsername => (
             vec![
                 Span::raw("Enter "),
-                Span::styled("private ", Style::default().add_modifier(Modifier::BOLD).fg(Color::LightMagenta)),
+                Span::styled(
+                    "private ",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::LightMagenta),
+                ),
                 Span::raw("Username"),
             ],
             Style::default(),
@@ -281,7 +314,12 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
                 Span::raw(" to stop private messaging, "),
                 Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" to send "),
-                Span::styled("private ", Style::default().add_modifier(Modifier::BOLD).fg(Color::LightMagenta)),
+                Span::styled(
+                    "private ",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::LightMagenta),
+                ),
                 Span::raw("Message"),
             ],
             Style::default(),
@@ -350,16 +388,24 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         .iter()
         .enumerate()
         .map(|(_i, m)| {
-            let content = vec![Spans::from(Span::raw(format!("{}", m)))];
+            let color = match m.0 {
+                MessageType::Public => Color::Yellow,
+                MessageType::Private => Color::LightMagenta,
+            };
+
+            let content = vec![Spans::from(Span::styled(
+                format!("{}", m.1),
+                Style::default().fg(color),
+            ))];
+
             ListItem::new(content)
         })
         .collect();
     drop(messages_guard);
 
-
     let mut size = match size() {
         Ok(x) => x,
-        Err(err) => panic!("{}: {}", "Error: ", err)
+        Err(_) => (0, 0),
     };
 
     if size.1 > 9 {
@@ -368,8 +414,10 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
 
     while messages.len() > size.1.into() {
         messages.remove(0);
-    };
+    }
 
-    let messages = List::new(messages).block(Block::default().borders(Borders::ALL).title("Messages")).style(Style::default().fg(Color::LightCyan));
+    let messages = List::new(messages)
+        .block(Block::default().borders(Borders::ALL).title("Messages"))
+        .style(Style::default().fg(Color::LightCyan));
     f.render_widget(messages, chunks[2]);
 }

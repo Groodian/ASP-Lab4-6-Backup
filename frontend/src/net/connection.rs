@@ -3,6 +3,7 @@ use crate::net::messages::{
     GlobalChatMessage, LoginMessage, PingMessage, PrivateChatMessage, PublishGlobalChatMessage,
     PublishPrivateChatMessage,
 };
+use crate::MessageType;
 use mio::{net::TcpStream, Interest, Registry, Token};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -59,7 +60,7 @@ pub struct Connection {
     message_number: usize,
     payload_size: usize,
     // current message decode data/state end
-    pub console_messages: Arc<Mutex<Vec<String>>>,
+    pub console_messages: Arc<Mutex<Vec<(MessageType, String)>>>,
 }
 
 impl Connection {
@@ -67,7 +68,7 @@ impl Connection {
         tcp_stream: TcpStream,
         registry: Rc<Registry>,
         token: Token,
-        console_messages: Arc<Mutex<Vec<String>>>,
+        console_messages: Arc<Mutex<Vec<(MessageType, String)>>>,
     ) -> Self {
         Self {
             tcp_stream,

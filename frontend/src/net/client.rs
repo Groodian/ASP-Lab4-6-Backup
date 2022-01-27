@@ -1,5 +1,6 @@
 use crate::net::connection::Connection;
 use crate::net::message::Message;
+use crate::MessageType;
 use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,12 +49,15 @@ pub struct Client {
     thread_handle: Option<JoinHandle<()>>,
     waker: Option<Arc<Waker>>,
     messages_queue: Arc<Mutex<VecDeque<Message>>>,
-    console_messages: Arc<Mutex<Vec<String>>>,
+    console_messages: Arc<Mutex<Vec<(MessageType, String)>>>,
     client_stop: ClientStop,
 }
 
 impl Client {
-    pub fn new(address: SocketAddr, console_messages: Arc<Mutex<Vec<String>>>) -> Self {
+    pub fn new(
+        address: SocketAddr,
+        console_messages: Arc<Mutex<Vec<(MessageType, String)>>>,
+    ) -> Self {
         Self {
             address,
             console_messages,
