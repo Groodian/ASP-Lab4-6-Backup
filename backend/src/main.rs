@@ -7,8 +7,8 @@ fn main() {
         .parse()
         .expect("Error while parsing address!");
 
-    let mut server = Server::new(THREADS_AMOUNT, address);
-    let server_stop = server.start();
+    let server = Server::new(THREADS_AMOUNT, address);
+    let server_stop = server.get_server_stop();
 
     ctrlc::set_handler(move || {
         println!("Received Ctrl+C, stopping...");

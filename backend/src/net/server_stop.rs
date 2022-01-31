@@ -25,6 +25,14 @@ impl ServerStop {
     }
 }
 
+impl Clone for ServerStop {
+    fn clone(&self) -> Self {
+        Self {
+            server_thread_stops: self.server_thread_stops.clone(),
+        }
+    }
+}
+
 impl ServerThreadStop {
     pub fn new() -> Self {
         Self {

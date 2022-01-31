@@ -19,28 +19,16 @@ const WAKER_TOKEN_BROADCAST: Token = Token(1);
 const MAIN_THREAD_NAME: &str = "Thread-Main";
 
 pub struct Server {
-    connection_thread_amount: usize,
-    address: SocketAddr,
-    server_thread_stop: ServerThreadStop,
-    server_socket_thread_handle: Option<JoinHandle<()>>,
-    connection_threads: Arc<Mutex<Vec<(ConnectionThread, EventHandler)>>>,
+    server_socket_thread_handle: JoinHandle<()>,
+    server_stop: ServerStop,
+    connection_threads: Arc<Mutex<Vec<ConnectionThread>>>,
 }
 
 impl Server {
     pub fn new(connection_thread_amount: usize, address: SocketAddr) -> Self {
-        Self {
-            connection_thread_amount,
-            address,
-            server_thread_stop: ServerThreadStop::new(),
-            server_socket_thread_handle: None,
-            connection_threads: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    pub fn start(&mut self) -> ServerStop {
         // Setup the TCP server socket.
         let mut server_socket =
-            TcpListener::bind(self.address).expect("Error while creating server socket!");
+            TcpListener::bind(address).expect("Error while creating server socket!");
 
         // Create a poll instance.
         let mut poll = Poll::new().expect("Error while creating poll!");
@@ -76,36 +64,36 @@ impl Server {
         // Next thread to add conncetion
         let mut next_thread = 0;
 
+        let server_thread_stop = ServerThreadStop::new();
+
         // Server thread stops
         let mut server_thread_stops: Vec<ServerThreadStop> = Vec::new();
-        server_thread_stops.push(self.server_thread_stop.clone());
-
-        let server_thread_stop = self.server_thread_stop.clone();
-        let connection_threads = Arc::clone(&self.connection_threads);
-
-        let connection_thread_amount = self.connection_thread_amount.clone();
+        server_thread_stops.push(server_thread_stop.clone());
 
         // Monitoring
         let mut monitoring = Monitoring::new(Duration::from_secs(30));
         let monitoring_stats = monitoring.get_new_stats();
 
+        // create connection threads
+        let connection_threads = Arc::new(Mutex::new(Vec::new()));
         let mut connection_threads_guard = connection_threads.lock().unwrap();
-        for i in 0..self.connection_thread_amount {
-            let mut connection_thread = ConnectionThread::new(
+        for i in 0..connection_thread_amount {
+            let connection_thread = ConnectionThread::new(
                 format!("Thread-{}", i),
                 event_handler.clone(),
                 monitoring.get_new_stats(),
             );
-            let event_handler = connection_thread.start();
             server_thread_stops.push(connection_thread.get_server_thread_stop());
-            connection_threads_guard.push((connection_thread, event_handler));
+            connection_threads_guard.push(connection_thread);
         }
         drop(connection_threads_guard);
 
-        self.server_socket_thread_handle = Some(
-            thread::Builder::new()
-                .name(MAIN_THREAD_NAME.to_string())
-                .spawn(move || {
+        let server_socket_thread_handle = thread::Builder::new()
+            .name(MAIN_THREAD_NAME.to_string())
+            .spawn({
+                let connection_threads = Arc::clone(&connection_threads);
+
+                move || {
                     println!("[{}] Started.", MAIN_THREAD_NAME);
 
                     loop {
@@ -158,7 +146,7 @@ impl Server {
 
                                     match connection_threads.get(next_thread) {
                                         Some(connection_thread) => {
-                                            connection_thread.0.add_connection(connection);
+                                            connection_thread.add_connection(connection);
                                         }
                                         None => (),
                                     }
@@ -181,9 +169,11 @@ impl Server {
                                     {
                                         for connection_thread in connection_threads_guard.iter_mut()
                                         {
-                                            connection_thread.1.broadcast_global_chat_message(
-                                                global_chat_message.clone(),
-                                            );
+                                            connection_thread
+                                                .event_handler
+                                                .broadcast_global_chat_message(
+                                                    global_chat_message.clone(),
+                                                );
                                         }
                                     }
 
@@ -193,9 +183,11 @@ impl Server {
                                     {
                                         for connection_thread in connection_threads_guard.iter_mut()
                                         {
-                                            connection_thread.1.private_chat_message_event(
-                                                private_chat_message_event.clone(),
-                                            );
+                                            connection_thread
+                                                .event_handler
+                                                .private_chat_message_event(
+                                                    private_chat_message_event.clone(),
+                                                );
                                         }
                                     }
 
@@ -212,26 +204,31 @@ impl Server {
                             }
                         }
                     }
-                })
-                .expect(format!("Error while creating: {}", MAIN_THREAD_NAME).as_str()),
-        );
+                }
+            })
+            .expect(format!("Error while creating: {}", MAIN_THREAD_NAME).as_str());
 
-        ServerStop::new(server_thread_stops)
+        Self {
+            server_socket_thread_handle,
+            server_stop: ServerStop::new(server_thread_stops),
+            connection_threads,
+        }
     }
 
-    pub fn join(&mut self) {
-        match self.server_socket_thread_handle.take() {
-            Some(server_socket_thread_handle) => match server_socket_thread_handle.join() {
-                Ok(_) => println!("[{}] Stopped.", MAIN_THREAD_NAME),
-                Err(_) => eprintln!("[{}] Error while stopping!", MAIN_THREAD_NAME),
-            },
-            None => (),
+    pub fn get_server_stop(&self) -> ServerStop {
+        self.server_stop.clone()
+    }
+
+    pub fn join(self) {
+        match self.server_socket_thread_handle.join() {
+            Ok(_) => println!("[{}] Stopped.", MAIN_THREAD_NAME),
+            Err(_) => eprintln!("[{}] Error while stopping!", MAIN_THREAD_NAME),
         }
 
         // If the main thread is stopped, wait until the connection threads stopped.
         let mut connection_threads_guard = self.connection_threads.lock().unwrap();
-        for connection_thread in connection_threads_guard.iter_mut() {
-            connection_thread.0.join();
+        for connection_thread in connection_threads_guard.drain(0..) {
+            connection_thread.join();
         }
         drop(connection_threads_guard);
     }

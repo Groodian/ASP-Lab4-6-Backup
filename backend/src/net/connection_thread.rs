@@ -26,12 +26,11 @@ const WAKER_TOKEN: Token = Token(0);
 
 pub struct ConnectionThread {
     connection_thread_name: String,
-    server_event_handler: EventHandler,
-    monitoring_stats: Arc<MonitoringStats>,
     server_thread_stop: ServerThreadStop,
-    waker: Option<Arc<Waker>>,
-    new_connection_sender: Option<Sender<TcpStream>>,
-    connection_thread_handle: Option<JoinHandle<()>>,
+    waker: Arc<Waker>,
+    pub event_handler: EventHandler,
+    new_connection_sender: Sender<TcpStream>,
+    connection_thread_handle: JoinHandle<()>,
 }
 
 impl ConnectionThread {
@@ -40,56 +39,48 @@ impl ConnectionThread {
         server_event_handler: EventHandler,
         monitoring_stats: Arc<MonitoringStats>,
     ) -> Self {
-        Self {
-            connection_thread_name,
-            server_event_handler,
-            monitoring_stats,
-            server_thread_stop: ServerThreadStop::new(),
-            waker: None,
-            new_connection_sender: None,
-            connection_thread_handle: None,
-        }
-    }
-
-    pub fn start(&mut self) -> EventHandler {
         // Create a poll instance.
         let mut poll = Poll::new().expect("Error while creating poll!");
-
-        // Create storage for events.
-        let mut events = Events::with_capacity(64);
 
         // Create waker connection instance.
         let waker = Arc::new(
             Waker::new(poll.registry(), WAKER_TOKEN).expect("Error while creating waker!"),
         );
-        self.waker = Some(Arc::clone(&waker));
-
-        // Unique token for each incoming connection.
-        let mut next_token = Token(2);
-
-        let duration = Some(Duration::from_millis(500));
-
-        let server_thread_stop = self.server_thread_stop.clone();
-        let server_event_handler = self.server_event_handler.clone();
-        let monitoring_stats = Arc::clone(&self.monitoring_stats);
-
-        let connection_thread_name = self.connection_thread_name.clone();
 
         // create channels
         let (new_connection_sender, new_connection_receiver) = channel::<TcpStream>();
-        self.new_connection_sender = Some(new_connection_sender);
-
         let (global_chat_message_sender, global_chat_message_receiver) =
             channel::<GlobalChatMessage>();
         let (private_chat_message_event_sender, private_chat_message_event_receiver) =
             channel::<PrivateChatMessageEvent>();
 
-        self.connection_thread_handle = Some(
-            thread::Builder::new()
-                .name(connection_thread_name.to_string())
-                .spawn(move || {
+        // create event handler
+        let event_handler = EventHandler::new(
+            Arc::clone(&waker),
+            global_chat_message_sender,
+            private_chat_message_event_sender,
+        );
+
+        let server_thread_stop = ServerThreadStop::new();
+
+        let connection_thread_handle = thread::Builder::new()
+            .name(connection_thread_name.to_string())
+            .spawn({
+                let connection_thread_name = connection_thread_name.clone();
+                let server_event_handler = server_event_handler.clone();
+                let server_thread_stop = server_thread_stop.clone();
+
+                move || {
                     // Map of `Token` -> `TcpStream`.
                     let mut connections: HashMap<Token, Connection> = HashMap::new();
+
+                    // Create storage for events.
+                    let mut events = Events::with_capacity(128);
+
+                    // Unique token for each incoming connection.
+                    let mut next_token = Token(2);
+
+                    let duration = Some(Duration::from_millis(500));
 
                     let registry = Rc::new(
                         poll.registry()
@@ -217,44 +208,36 @@ impl ConnectionThread {
                             }
                         }
                     }
-                })
-                .expect(format!("Error while creating: {}", self.connection_thread_name).as_str()),
-        );
+                }
+            })
+            .expect(format!("Error while creating: {}", connection_thread_name).as_str());
 
-        // create event handler
-        return EventHandler::new(
+        Self {
+            connection_thread_name,
+            server_thread_stop,
             waker,
-            global_chat_message_sender,
-            private_chat_message_event_sender,
-        );
+            event_handler,
+            new_connection_sender,
+            connection_thread_handle,
+        }
     }
 
     pub fn add_connection(&self, connection: TcpStream) {
-        match &self.new_connection_sender {
-            Some(new_connection_sender) => {
-                new_connection_sender
-                    .send(connection)
-                    .expect("Error while adding connection!");
-                match &self.waker {
-                    Some(waker) => waker.wake().expect("Error while wake!"),
-                    None => (),
-                }
-            }
-            None => (),
-        }
-    }
+        self.new_connection_sender
+            .send(connection)
+            .expect("Error while adding connection!");
 
-    pub fn join(&mut self) {
-        match self.connection_thread_handle.take() {
-            Some(connection_thread_handle) => match connection_thread_handle.join() {
-                Ok(_) => println!("[{}] Stopped.", self.connection_thread_name),
-                Err(_) => eprintln!("[{}] Error while stopping!", self.connection_thread_name),
-            },
-            None => (),
-        }
+        self.waker.wake().expect("Error while wake!")
     }
 
     pub fn get_server_thread_stop(&self) -> ServerThreadStop {
         self.server_thread_stop.clone()
+    }
+
+    pub fn join(self) {
+        match self.connection_thread_handle.join() {
+            Ok(_) => println!("[{}] Stopped.", self.connection_thread_name),
+            Err(_) => eprintln!("[{}] Error while stopping!", self.connection_thread_name),
+        }
     }
 }
