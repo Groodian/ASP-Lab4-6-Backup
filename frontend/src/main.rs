@@ -10,7 +10,7 @@ use crossterm::{
         disable_raw_mode, enable_raw_mode, size, EnterAlternateScreen, LeaveAlternateScreen,
     },
 };
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 use std::{error::Error, io};
 use tui::{
@@ -36,13 +36,15 @@ pub enum MessageType {
     Private,
 }
 
+type ConsoleMessage = (MessageType, String);
+
 struct App {
     /// Current value of the input box
     input: String,
     /// Current input mode
     input_mode: InputMode,
     /// History of recorded messages
-    messages: Arc<Mutex<Vec<(MessageType, String)>>>,
+    console_messages: Vec<ConsoleMessage>,
 }
 
 impl Default for App {
@@ -50,7 +52,7 @@ impl Default for App {
         App {
             input: String::new(),
             input_mode: InputMode::Username,
-            messages: Arc::new(Mutex::new(Vec::new())),
+            console_messages: Vec::new(),
         }
     }
 }
@@ -88,14 +90,16 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
         .parse()
         .expect("Error while parsing address!");
 
-    let mut client = Client::new(address, Arc::clone(&app.messages));
-    let mut client_stop: Option<ClientStop> = None;
+    let (console_message_sender, console_message_receiver) = channel::<ConsoleMessage>();
+
+    let mut client = Client::new(address, console_message_sender);
+    let client_stop: ClientStop = client.get_client_stop();
     let mut private_username: String = String::new();
 
     print!("\x1B[2J\x1B[1;1H");
 
     loop {
-        terminal.draw(|f| ui(f, &app))?;
+        terminal.draw(|f| ui(f, &mut app, &console_message_receiver))?;
 
         if event::poll(Duration::from_secs(0))? {
             if let Event::Key(key) = event::read()? {
@@ -105,13 +109,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                             app.input_mode = InputMode::Editing;
                         }
                         KeyCode::Char('q') => {
-                            match client_stop {
-                                Some(client_stop) => {
-                                    client_stop.stop();
-                                    client.join();
-                                }
-                                None => {}
-                            }
+                            client_stop.stop();
+                            client.join();
                             return Ok(());
                         }
                         KeyCode::Char('p') => {
@@ -132,8 +131,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                                 };
                                 client.send_message(Message::new(private_chat_message));
 
-                                let mut messages_guard = app.messages.lock().unwrap();
-                                messages_guard.push((
+                                app.console_messages.push((
                                     MessageType::Private,
                                     format!(
                                         "[PRIVATE] [ME -> {}] {}",
@@ -141,7 +139,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                                         split[2..].join(" ")
                                     ),
                                 ));
-                                drop(messages_guard);
                             } else {
                                 let global_chat_message = PublishGlobalChatMessage { message };
                                 client.send_message(Message::new(global_chat_message));
@@ -162,7 +159,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                         KeyCode::Enter => {
                             let name = app.input.drain(..).collect();
 
-                            client_stop = Some(client.connect());
                             let login_message = LoginMessage { user_name: name };
                             client.send_message(Message::new(login_message));
 
@@ -205,8 +201,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                             };
                             client.send_message(Message::new(private_chat_message));
 
-                            let mut messages_guard = app.messages.lock().unwrap();
-                            messages_guard.push((
+                            app.console_messages.push((
                                 MessageType::Private,
                                 format!(
                                     "[PRIVATE] [ME -> {}] {}",
@@ -214,7 +209,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                                     split[2..].join(" ")
                                 ),
                             ));
-                            drop(messages_guard);
                         }
                         KeyCode::Char(c) => {
                             app.input.push(c);
@@ -233,7 +227,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
     }
 }
 
-fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
+fn ui<B: Backend>(
+    f: &mut Frame<B>,
+    app: &mut App,
+    console_message_receiver: &Receiver<ConsoleMessage>,
+) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(2)
@@ -383,8 +381,12 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         }
     }
 
-    let messages_guard = app.messages.lock().unwrap();
-    let mut messages: Vec<ListItem> = messages_guard
+    for console_message in console_message_receiver.try_iter() {
+        app.console_messages.push(console_message);
+    }
+
+    let mut messages: Vec<ListItem> = app
+        .console_messages
         .iter()
         .enumerate()
         .map(|(_i, m)| {
@@ -401,7 +403,6 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
             ListItem::new(content)
         })
         .collect();
-    drop(messages_guard);
 
     let mut size = match size() {
         Ok(x) => x,

@@ -1,10 +1,9 @@
 use crate::net::connection::Connection;
 use crate::net::message::Message;
-use crate::MessageType;
+use crate::ConsoleMessage;
 use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::mpsc::{channel, Sender};
 use std::{
     net::SocketAddr,
     rc::Rc,
@@ -45,30 +44,14 @@ impl Clone for ClientStop {
 }
 
 pub struct Client {
-    address: SocketAddr,
-    thread_handle: Option<JoinHandle<()>>,
-    waker: Option<Arc<Waker>>,
-    messages_queue: Arc<Mutex<VecDeque<Message>>>,
-    console_messages: Arc<Mutex<Vec<(MessageType, String)>>>,
+    thread_handle: JoinHandle<()>,
+    waker: Waker,
+    message_sender: Sender<Message>,
     client_stop: ClientStop,
 }
 
 impl Client {
-    pub fn new(
-        address: SocketAddr,
-        console_messages: Arc<Mutex<Vec<(MessageType, String)>>>,
-    ) -> Self {
-        Self {
-            address,
-            console_messages,
-            thread_handle: None,
-            waker: None,
-            messages_queue: Arc::new(Mutex::new(VecDeque::new())),
-            client_stop: ClientStop::new(),
-        }
-    }
-
-    pub fn connect(&mut self) -> ClientStop {
+    pub fn new(address: SocketAddr, console_messages_sender: Sender<ConsoleMessage>) -> Self {
         // Create a poll instance.
         let mut poll = Poll::new().expect("Error while creating poll!");
 
@@ -78,38 +61,43 @@ impl Client {
         let duration = Some(Duration::from_millis(500));
 
         let std_tcp_stream =
-            std::net::TcpStream::connect(self.address).expect("Error while connecting to server!");
+            std::net::TcpStream::connect(address).expect("Error while connecting to server!");
         std_tcp_stream
             .set_nonblocking(true)
             .expect("Error while set non blocking!");
         let mut tcp_stream = TcpStream::from_std(std_tcp_stream);
 
         // Create waker instance.
-        let waker = Arc::new(
-            Waker::new(poll.registry(), WAKER_TOKEN).expect("Error while creating waker!"),
-        );
-        self.waker = Some(waker.clone());
+        let waker = Waker::new(poll.registry(), WAKER_TOKEN).expect("Error while creating waker!");
 
         poll.registry()
             .register(&mut tcp_stream, TOKEN, Interest::READABLE)
             .expect("Error while registering client!");
 
-        let messages_queue = Arc::clone(&self.messages_queue);
-        let console_messages = Arc::clone(&self.console_messages);
-        let client_stop = self.client_stop.clone();
+        // create channel
+        let (message_sender, message_receiver) = channel::<Message>();
 
-        self.thread_handle = Some(
-            thread::Builder::new()
-                .name("Client".to_string())
-                .spawn(move || {
+        let client_stop = ClientStop::new();
+
+        let thread_handle = thread::Builder::new()
+            .name("Client".to_string())
+            .spawn({
+                let client_stop = client_stop.clone();
+                let console_messages_sender = console_messages_sender.clone();
+
+                move || {
                     let registry = Rc::new(
                         poll.registry()
                             .try_clone()
                             .expect("Error while clone registry!"),
                     );
 
-                    let mut connection =
-                        Connection::new(tcp_stream, Rc::clone(&registry), TOKEN, console_messages);
+                    let mut connection = Connection::new(
+                        tcp_stream,
+                        Rc::clone(&registry),
+                        TOKEN,
+                        console_messages_sender,
+                    );
 
                     loop {
                         let poll_result = poll.poll(&mut events, duration);
@@ -127,18 +115,9 @@ impl Client {
                             match event.token() {
                                 WAKER_TOKEN => {
                                     // check for broadcast messages
-                                    let mut messages_queue = messages_queue.lock().unwrap();
-
-                                    loop {
-                                        match messages_queue.pop_front() {
-                                            Some(message) => {
-                                                connection.send_message(message);
-                                            }
-                                            None => break,
-                                        }
+                                    for message in message_receiver.try_iter() {
+                                        connection.send_message(message);
                                     }
-
-                                    drop(messages_queue);
                                 }
                                 TOKEN => {
                                     let mut remove_connection = false;
@@ -165,33 +144,34 @@ impl Client {
                             }
                         }
                     }
-                })
-                .expect("Error while creating client thread!"),
-        );
+                }
+            })
+            .expect("Error while creating client thread!");
 
-        self.client_stop.clone()
-    }
-
-    pub fn send_message(&mut self, message: Message) {
-        let mut broadcast_messages = self.messages_queue.lock().unwrap();
-
-        broadcast_messages.push_back(message);
-
-        drop(broadcast_messages);
-
-        match &self.waker {
-            Some(waker) => waker.wake().expect("Error while wake!"),
-            None => (),
+        Self {
+            thread_handle,
+            waker,
+            message_sender,
+            client_stop,
         }
     }
 
+    pub fn send_message(&mut self, message: Message) {
+        self.message_sender
+            .send(message)
+            .expect("Error while sending message!");
+
+        self.waker.wake().expect("Error while wake!")
+    }
+
+    pub fn get_client_stop(&self) -> ClientStop {
+        self.client_stop.clone()
+    }
+
     pub fn join(self) {
-        match self.thread_handle {
-            Some(thread_handle) => match thread_handle.join() {
-                Ok(_) => println!("Stopped."),
-                Err(_) => eprintln!("Error while stopping!"),
-            },
-            None => (),
+        match self.thread_handle.join() {
+            Ok(_) => println!("Stopped."),
+            Err(_) => eprintln!("Error while stopping!"),
         }
     }
 }

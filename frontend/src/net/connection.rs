@@ -3,10 +3,10 @@ use crate::net::messages::{
     GlobalChatMessage, LoginMessage, PingMessage, PrivateChatMessage, PublishGlobalChatMessage,
     PublishPrivateChatMessage,
 };
-use crate::MessageType;
+use crate::ConsoleMessage;
 use mio::{net::TcpStream, Interest, Registry, Token};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::Sender;
 use std::{
     collections::VecDeque,
     io::{self, Read, Write},
@@ -60,7 +60,7 @@ pub struct Connection {
     message_number: usize,
     payload_size: usize,
     // current message decode data/state end
-    pub console_messages: Arc<Mutex<Vec<(MessageType, String)>>>,
+    pub console_message_sender: Sender<ConsoleMessage>,
 }
 
 impl Connection {
@@ -68,13 +68,13 @@ impl Connection {
         tcp_stream: TcpStream,
         registry: Rc<Registry>,
         token: Token,
-        console_messages: Arc<Mutex<Vec<(MessageType, String)>>>,
+        console_message_sender: Sender<ConsoleMessage>,
     ) -> Self {
         Self {
             tcp_stream,
             registry,
             token,
-            console_messages: console_messages,
+            console_message_sender,
             message_queue: VecDeque::new(),
             out_buffer: Box::new([0; MAX_PAYLOAD]),
             out_buffer_pos: 0,

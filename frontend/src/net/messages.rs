@@ -59,12 +59,13 @@ pub struct GlobalChatMessage {
 
 impl MessageTrait for GlobalChatMessage {
     fn process(self, connection: &mut Connection) {
-        let mut console_messages_guard = connection.console_messages.lock().unwrap();
-        console_messages_guard.push((
-            MessageType::Public,
-            format!("{}: {}", self.user_name, self.message),
-        ));
-        drop(console_messages_guard);
+        connection
+            .console_message_sender
+            .send((
+                MessageType::Public,
+                format!("{}: {}", self.user_name, self.message),
+            ))
+            .unwrap();
     }
 
     fn number(&self) -> u32 {
@@ -94,12 +95,13 @@ pub struct PrivateChatMessage {
 
 impl MessageTrait for PrivateChatMessage {
     fn process(self, connection: &mut Connection) {
-        let mut console_messages_guard = connection.console_messages.lock().unwrap();
-        console_messages_guard.push((
-            MessageType::Private,
-            format!("[PRIVATE] [{} -> ME] {}", self.from_user_name, self.message),
-        ));
-        drop(console_messages_guard);
+        connection
+            .console_message_sender
+            .send((
+                MessageType::Private,
+                format!("[PRIVATE] [{} -> ME] {}", self.from_user_name, self.message),
+            ))
+            .unwrap();
     }
 
     fn number(&self) -> u32 {
