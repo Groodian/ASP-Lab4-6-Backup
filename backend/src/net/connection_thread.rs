@@ -2,10 +2,7 @@ use crate::net::{
     connection::Connection,
     event::EventHandler,
     monitoring::MonitoringStats,
-    msg::{
-        message::Message,
-        messages::{GlobalChatMessage, PrivateChatMessage},
-    },
+    msg::{message::Message, messages::PrivateChatMessage},
     server_stop::ServerThreadStop,
 };
 use mio::{net::TcpStream, Events, Interest, Poll, Token, Waker};
@@ -19,8 +16,6 @@ use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
-
-use super::event::PrivateChatMessageEvent;
 
 const WAKER_TOKEN: Token = Token(0);
 
@@ -49,17 +44,10 @@ impl ConnectionThread {
 
         // create channels
         let (new_connection_sender, new_connection_receiver) = channel::<TcpStream>();
-        let (global_chat_message_sender, global_chat_message_receiver) =
-            channel::<GlobalChatMessage>();
-        let (private_chat_message_event_sender, private_chat_message_event_receiver) =
-            channel::<PrivateChatMessageEvent>();
 
         // create event handler
-        let event_handler = EventHandler::new(
-            Arc::clone(&waker),
-            global_chat_message_sender,
-            private_chat_message_event_sender,
-        );
+        let (event_handler, global_chat_message_receiver, private_chat_message_event_receiver) =
+            EventHandler::new(Arc::clone(&waker));
 
         let server_thread_stop = ServerThreadStop::new();
 

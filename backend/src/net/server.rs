@@ -1,15 +1,14 @@
 use crate::net::{
     connection_thread::ConnectionThread,
-    event::{EventHandler, PrivateChatMessageEvent},
+    event::EventHandler,
     monitoring::Monitoring,
-    msg::messages::GlobalChatMessage,
     server_stop::{ServerStop, ServerThreadStop},
 };
 use mio::{net::TcpListener, Events, Interest, Poll, Token, Waker};
 use std::{
     io,
     net::SocketAddr,
-    sync::{mpsc::channel, Arc, Mutex},
+    sync::{Arc, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -47,17 +46,9 @@ impl Server {
                 .expect("Error while creating waker!"),
         );
 
-        // create channels
-        let (global_chat_message_sender, global_chat_message_receiver) =
-            channel::<GlobalChatMessage>();
-        let (private_chat_message_event_sender, private_chat_message_event_receiver) =
-            channel::<PrivateChatMessageEvent>();
-
-        let event_handler = EventHandler::new(
-            waker,
-            global_chat_message_sender,
-            private_chat_message_event_sender,
-        );
+        // create event handler
+        let (event_handler, global_chat_message_receiver, private_chat_message_event_receiver) =
+            EventHandler::new(waker);
 
         let duration = Some(Duration::from_millis(500));
 
