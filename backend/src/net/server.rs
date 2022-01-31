@@ -1,14 +1,15 @@
 use crate::net::{
     connection_thread::ConnectionThread,
-    event::EventHandler,
+    event::{EventHandler, PrivateChatMessageEvent},
     monitoring::Monitoring,
+    msg::messages::GlobalChatMessage,
     server_stop::{ServerStop, ServerThreadStop},
 };
 use mio::{net::TcpListener, Events, Interest, Poll, Token, Waker};
 use std::{
     io,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{mpsc::channel, Arc, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -22,7 +23,7 @@ pub struct Server {
     address: SocketAddr,
     server_thread_stop: ServerThreadStop,
     server_socket_thread_handle: Option<JoinHandle<()>>,
-    connection_threads: Arc<Mutex<Vec<ConnectionThread>>>,
+    connection_threads: Arc<Mutex<Vec<(ConnectionThread, EventHandler)>>>,
 }
 
 impl Server {
@@ -58,7 +59,17 @@ impl Server {
                 .expect("Error while creating waker!"),
         );
 
-        let event_handler = EventHandler::new(Some(waker));
+        // create channels
+        let (global_chat_message_sender, global_chat_message_receiver) =
+            channel::<GlobalChatMessage>();
+        let (private_chat_message_event_sender, private_chat_message_event_receiver) =
+            channel::<PrivateChatMessageEvent>();
+
+        let event_handler = EventHandler::new(
+            waker,
+            global_chat_message_sender,
+            private_chat_message_event_sender,
+        );
 
         let duration = Some(Duration::from_millis(500));
 
@@ -85,9 +96,9 @@ impl Server {
                 event_handler.clone(),
                 monitoring.get_new_stats(),
             );
-            connection_thread.start();
+            let event_handler = connection_thread.start();
             server_thread_stops.push(connection_thread.get_server_thread_stop());
-            connection_threads_guard.push(connection_thread);
+            connection_threads_guard.push((connection_thread, event_handler));
         }
         drop(connection_threads_guard);
 
@@ -147,7 +158,7 @@ impl Server {
 
                                     match connection_threads.get(next_thread) {
                                         Some(connection_thread) => {
-                                            connection_thread.add_connection(connection);
+                                            connection_thread.0.add_connection(connection);
                                         }
                                         None => (),
                                     }
@@ -160,52 +171,33 @@ impl Server {
                                     drop(connection_threads);
                                 },
                                 WAKER_TOKEN_BROADCAST => {
+                                    // check for global chat messages
+
                                     let mut connection_threads_guard =
                                         connection_threads.lock().unwrap();
 
-                                    // check for global chat messages
-                                    let mut global_chat_message_queue_guard =
-                                        event_handler.global_chat_message_queue.lock().unwrap();
-                                    loop {
-                                        match global_chat_message_queue_guard.pop_front() {
-                                            Some(message) => {
-                                                for connection_thread in
-                                                    connection_threads_guard.iter_mut()
-                                                {
-                                                    connection_thread
-                                                        .event_handler
-                                                        .broadcast_global_chat_message(
-                                                            message.clone(),
-                                                        );
-                                                }
-                                            }
-                                            None => break,
+                                    for global_chat_message in
+                                        global_chat_message_receiver.try_iter()
+                                    {
+                                        for connection_thread in connection_threads_guard.iter_mut()
+                                        {
+                                            connection_thread.1.broadcast_global_chat_message(
+                                                global_chat_message.clone(),
+                                            );
                                         }
                                     }
-                                    drop(global_chat_message_queue_guard);
 
                                     // check for private messages
-                                    let mut private_chat_message_event_queue_guard = event_handler
-                                        .private_chat_message_event_queue
-                                        .lock()
-                                        .unwrap();
-                                    loop {
-                                        match private_chat_message_event_queue_guard.pop_front() {
-                                            Some(message) => {
-                                                for connection_thread in
-                                                    connection_threads_guard.iter_mut()
-                                                {
-                                                    connection_thread
-                                                        .event_handler
-                                                        .private_chat_message_event(
-                                                            message.clone(),
-                                                        );
-                                                }
-                                            }
-                                            None => break,
+                                    for private_chat_message_event in
+                                        private_chat_message_event_receiver.try_iter()
+                                    {
+                                        for connection_thread in connection_threads_guard.iter_mut()
+                                        {
+                                            connection_thread.1.private_chat_message_event(
+                                                private_chat_message_event.clone(),
+                                            );
                                         }
                                     }
-                                    drop(private_chat_message_event_queue_guard);
 
                                     drop(connection_threads_guard);
                                 }
@@ -239,7 +231,7 @@ impl Server {
         // If the main thread is stopped, wait until the connection threads stopped.
         let mut connection_threads_guard = self.connection_threads.lock().unwrap();
         for connection_thread in connection_threads_guard.iter_mut() {
-            connection_thread.join();
+            connection_thread.0.join();
         }
         drop(connection_threads_guard);
     }
